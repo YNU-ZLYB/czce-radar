@@ -25,4 +25,5 @@ apps/web/.vite/
 htmlcov/
 backtest/*.json
 data/cache/
-models/
+# 只忽略根目录的模型产物，避免误伤 apps/api/app/models 代码包
+/models/
