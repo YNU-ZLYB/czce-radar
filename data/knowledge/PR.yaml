@@ -1,0 +1,37 @@
+# 瓶片 PR · 产业链知识（来源：v1 手册 §三.9 / §五）
+code: PR
+name: 瓶片
+sector: 能源化工
+linkage_q: 0.85 # v1 回测样本外命中率 66.9%
+chain:
+  upstream: [PTA, 乙二醇]
+  midstream: [瓶级切片装置]
+  downstream: [饮料包装, 出口订单]
+drivers:
+  - name: 布伦特原油
+    kind: cost
+    proxy_ext: OIL
+    prior: 0.50
+    mechanism: 聚酯链成本最上游
+  - name: PTA
+    kind: cost
+    proxy_variety: TA
+    prior: 0.30
+    mechanism: PTA 占瓶片原料成本大头
+  - name: 乙二醇
+    kind: cost
+    prior: 0.10
+    mechanism: 另一主要原料（大商所品种，暂无免费日频源）
+seasonality:
+  - stage: 饮料旺季
+    months: [4, 5, 6, 7, 8, 9]
+    bias: 2.0
+    confidence: 0.4
+    note: 软饮料产销旺季，瓶片订单集中释放
+events:
+  - 软饮料出口订单
+  - 新产能投产
+risk_notes:
+  - 新产能集中，加工费易被压缩
+reviewed: true
+reviewed_by: ai

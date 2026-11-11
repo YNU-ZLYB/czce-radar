@@ -1,0 +1,39 @@
+# 菜籽粕 RM · 产业链知识（来源：v1 手册 §三.14 / §五）
+code: RM
+name: 菜籽粕
+sector: 油脂油料
+linkage_q: 0.44 # v1 回测样本外命中率 58.7%
+chain:
+  upstream: [油菜籽]
+  midstream: [压榨厂（副产物）]
+  downstream: [水产饲料, 禽料]
+drivers:
+  - name: CBOT 豆粕
+    kind: substitute
+    proxy_ext: SM
+    prior: 0.50
+    mechanism: 蛋白粕替代联动，方向主导
+  - name: CBOT 大豆
+    kind: cost
+    proxy_ext: S
+    prior: 0.20
+    mechanism: 美豆供给决定蛋白粕整体中枢
+  - name: 加拿大菜籽
+    kind: cost
+    proxy_variety: RS
+    prior: 0.20
+    mechanism: 进口菜籽压榨供给
+seasonality:
+  - stage: 水产旺季
+    months: [4, 5, 6, 7, 8, 9]
+    bias: 2.0
+    confidence: 0.4
+    note: 投苗与投喂高峰，菜粕需求集中
+events:
+  - 加拿大菜籽产量与对华政策
+  - 豆粕现货成交
+  - 水产投苗数据
+risk_notes:
+  - 替代品豆粕主导方向，自身供需只是幅度修正
+reviewed: true
+reviewed_by: ai

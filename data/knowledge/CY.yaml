@@ -1,0 +1,39 @@
+# 棉纱 CY · 产业链知识（来源：v1 手册 §三.3 / §五）
+code: CY
+name: 棉纱
+sector: 软商品
+linkage_q: 0.70 # v1 回测样本外命中率 64.0%
+chain:
+  upstream: [棉花]
+  midstream: [纺纱厂]
+  downstream: [织布, 服装]
+drivers:
+  - name: 棉花
+    kind: cost
+    proxy_variety: CF
+    prior: 0.70
+    mechanism: 本质是「棉花 + 加工费」，方向跟随棉花
+  - name: ICE 美棉
+    kind: cost
+    proxy_ext: CT
+    prior: 0.35
+    mechanism: 全球棉价锚
+seasonality:
+  - stage: 纺织旺季
+    months: [3, 4, 5]
+    bias: 1.5
+    confidence: 0.3
+    note: 跟随棉花旺季
+  - stage: 新棉上市
+    months: [9, 10, 11]
+    bias: -1.5
+    confidence: 0.3
+    note: 原料价格回落带动
+events:
+  - 纺纱利润与开机率
+  - 纱厂库存
+  - 纺织订单外流东南亚
+risk_notes:
+  - 弹性小于棉花，跟随为主
+reviewed: true
+reviewed_by: ai

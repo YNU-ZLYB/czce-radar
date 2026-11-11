@@ -1,0 +1,28 @@
+# 花生 PK · 产业链知识（来源：v1 手册 §三.18 / §五）
+code: PK
+name: 花生
+sector: 油脂油料
+linkage_q: 0.0 # v1 回测样本不足未校准，传导行暂不展示，待回测后启用
+chain:
+  upstream: [花生仁（豫鲁产区）, 进口花生（苏丹/塞内加尔）]
+  midstream: [压榨厂（花生油+花生粕）]
+  downstream: [食用油, 食品加工]
+drivers:
+  - name: CBOT 豆油
+    kind: substitute
+    proxy_ext: BO
+    prior: 0.20
+    mechanism: 油脂替代联动
+  - name: 棕榈油
+    kind: substitute
+    prior: 0.15
+    mechanism: 食用油替代（大商所品种，暂无免费日频源）
+seasonality: []
+events:
+  - 豫鲁产区天气
+  - 进口到港量
+  - 油厂收购价策略
+risk_notes:
+  - q 未校准（历史样本不足），传导行暂不展示
+reviewed: true
+reviewed_by: ai

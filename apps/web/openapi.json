@@ -1,0 +1,564 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "CZCE Radar API",
+    "description": "郑商所品种预测研判系统 · 接口层",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/live": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "存活探针",
+        "description": "不触碰数据库与 Redis，进程能响应即返回 200，供平台健康检查使用。",
+        "operationId": "live_live_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "就绪状态（db / redis / worker 三态）",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "数据库或 Redis 不可用，API 当前无法对外服务"
+          }
+        }
+      }
+    },
+    "/api/v1/sources": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "数据源状态与最近成功时间",
+        "operationId": "list_sources_api_v1_sources_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/predictions": {
+      "get": {
+        "tags": [
+          "predictions"
+        ],
+        "summary": "按目标日查询预测（不传 date 则取最新一天）",
+        "operationId": "list_predictions_api_v1_predictions_get",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date"
+            }
+          },
+          {
+            "name": "variety",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "品种代码，如 MA",
+              "title": "Variety"
+            },
+            "description": "品种代码，如 MA"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PredictionListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ComponentStatus": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "error"
+        ],
+        "title": "ComponentStatus"
+      },
+      "ContributorItem": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value",
+            "description": "驱动取值（%，季节性为 null）"
+          },
+          "weight": {
+            "type": "number",
+            "title": "Weight",
+            "description": "先验权重"
+          },
+          "q": {
+            "type": "number",
+            "title": "Q",
+            "description": "品种级校准系数"
+          },
+          "contribution": {
+            "type": "number",
+            "title": "Contribution",
+            "description": "对信号/期望涨跌幅的贡献"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "weight",
+          "q",
+          "contribution"
+        ],
+        "title": "ContributorItem"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "title": "Status",
+            "description": "ok 表示三态全部正常；degraded 表示至少一项异常"
+          },
+          "db": {
+            "$ref": "#/components/schemas/ComponentStatus"
+          },
+          "redis": {
+            "$ref": "#/components/schemas/ComponentStatus"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/ComponentStatus"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Time"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "db",
+          "redis",
+          "worker",
+          "version",
+          "time"
+        ],
+        "title": "HealthResponse",
+        "description": "就绪状态：db / redis 决定是否可对外服务，worker 仅作展示。"
+      },
+      "LiveResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "alive",
+            "title": "Status"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "version",
+          "time"
+        ],
+        "title": "LiveResponse",
+        "description": "存活探针：只说明进程还能响应，不触碰任何外部依赖。"
+      },
+      "PredictionItem": {
+        "properties": {
+          "variety_code": {
+            "type": "string",
+            "title": "Variety Code"
+          },
+          "target_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Target Date"
+          },
+          "asof": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Asof"
+          },
+          "direction": {
+            "type": "integer",
+            "title": "Direction",
+            "description": "-1/0/1"
+          },
+          "bucket": {
+            "type": "string",
+            "title": "Bucket",
+            "description": "强空/偏空/震荡/偏多/强多"
+          },
+          "p_up": {
+            "type": "number",
+            "title": "P Up"
+          },
+          "p_flat": {
+            "type": "number",
+            "title": "P Flat"
+          },
+          "p_down": {
+            "type": "number",
+            "title": "P Down"
+          },
+          "exp_change": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exp Change"
+          },
+          "signal": {
+            "type": "integer",
+            "title": "Signal",
+            "description": "-100..100"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "contributor": {
+            "items": {
+              "$ref": "#/components/schemas/ContributorItem"
+            },
+            "type": "array",
+            "title": "Contributor"
+          },
+          "model_version": {
+            "type": "string",
+            "title": "Model Version"
+          },
+          "narrative": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Narrative"
+          }
+        },
+        "type": "object",
+        "required": [
+          "variety_code",
+          "target_date",
+          "asof",
+          "direction",
+          "bucket",
+          "p_up",
+          "p_flat",
+          "p_down",
+          "signal",
+          "confidence",
+          "contributor",
+          "model_version"
+        ],
+        "title": "PredictionItem"
+      },
+      "PredictionListResponse": {
+        "properties": {
+          "predictions": {
+            "items": {
+              "$ref": "#/components/schemas/PredictionItem"
+            },
+            "type": "array",
+            "title": "Predictions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "predictions"
+        ],
+        "title": "PredictionListResponse"
+      },
+      "SourceListResponse": {
+        "properties": {
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceStatus"
+            },
+            "type": "array",
+            "title": "Sources"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sources"
+        ],
+        "title": "SourceListResponse"
+      },
+      "SourceStatus": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "quote/news/metric 等"
+          },
+          "interval_sec": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Sec"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "last_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Status",
+            "description": "ok/empty/error/skip"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "last_fetched": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Fetched",
+            "description": "最近一次抓取条数"
+          },
+          "last_inserted": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Inserted",
+            "description": "最近一次新插入条数"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "name",
+          "kind"
+        ],
+        "title": "SourceStatus"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

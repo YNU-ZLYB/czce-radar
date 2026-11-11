@@ -1,0 +1,34 @@
+# 烧碱 SH · 产业链知识（来源：v1 手册 §三.11 / §五）
+code: SH
+name: 烧碱
+sector: 能源化工
+linkage_q: 0.0 # v1 回测：日频外盘传导被证伪（53.1%），不展示传导行
+chain:
+  upstream: [原盐, 电力]
+  midstream: [氯碱装置（离子膜）]
+  downstream: [氧化铝, 造纸, 化纤, 水处理]
+drivers:
+  - name: 布伦特原油
+    kind: cost
+    proxy_ext: OIL
+    prior: 0.25
+    mechanism: 能化板块情绪间接传导
+  - name: NYMEX 天然气
+    kind: cost
+    proxy_ext: NG
+    prior: 0.25
+    mechanism: 能源成本（国内电价为主，外盘仅情绪）
+  - name: 氧化铝
+    kind: demand
+    prior: 0.25
+    mechanism: 最大下游，其开工率决定烧碱需求（上期所品种，暂无免费日频源）
+seasonality: []
+events:
+  - 氧化铝开工率变化
+  - 液氯价格（氯碱平衡）
+  - 集中检修计划
+risk_notes:
+  - 与液氯为联产品，只看烧碱涨会误判利润
+  - q=0：天然气→成本逻辑在日频被证伪，传导行不展示
+reviewed: true
+reviewed_by: ai

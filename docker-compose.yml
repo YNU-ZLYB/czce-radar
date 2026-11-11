@@ -1,0 +1,73 @@
+name: czce-radar
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: czce
+      POSTGRES_PASSWORD: czce
+      POSTGRES_DB: czce
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U czce -d czce"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    image: czce-radar-api:local
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+asyncpg://czce:czce@db:5432/czce
+      REDIS_URL: redis://redis:6379/0
+      API_TOKEN: local-dev-token
+      CORS_ORIGINS: '["http://localhost:5173"]'
+      RUN_MIGRATIONS: "1"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: czce-radar-api:local
+    command: ["arq", "jobs.worker.WorkerSettings"]
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+asyncpg://czce:czce@db:5432/czce
+      REDIS_URL: redis://redis:6379/0
+      API_TOKEN: local-dev-token
+      RUN_MIGRATIONS: "0"
+    # 镜像自带 HEALTHCHECK 打的是 API 的 /live；worker 不监听端口，故关闭
+    healthcheck:
+      disable: true
+    depends_on:
+      # 等 API 容器执行完 alembic upgrade head 再启动 worker，避免定时任务撞上空库
+      api:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:

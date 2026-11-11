@@ -1,0 +1,39 @@
+# 菜籽油 OI · 产业链知识（来源：v1 手册 §三.13 / §五）
+code: OI
+name: 菜籽油
+sector: 油脂油料
+linkage_q: 1.0 # v1 回测样本外命中率 73.9%（最高）
+chain:
+  upstream: [油菜籽（加拿大进口）, 国产菜籽（长江流域）]
+  midstream: [压榨厂]
+  downstream: [餐饮烹饪, 小包装食用油]
+drivers:
+  - name: CBOT 豆油
+    kind: substitute
+    proxy_ext: BO
+    prior: 0.50
+    mechanism: 油脂间替代与板块联动
+  - name: 加拿大菜籽
+    kind: cost
+    proxy_variety: RS
+    prior: 0.25
+    mechanism: 进口成本主导；国内 RS 为其期货影子
+  - name: 棕榈油
+    kind: substitute
+    prior: 0.15
+    mechanism: 豆棕菜油价差联动（大商所品种，暂无免费日频源）
+  - name: 布伦特原油
+    kind: cost
+    proxy_ext: OIL
+    prior: 0.10
+    mechanism: 生物柴油需求平价
+seasonality: []
+events:
+  - 加拿大菜籽产量报告
+  - 中加贸易政策
+  - MPOB 月报（每月 10 日左右）
+  - 抛储/储备轮换
+risk_notes:
+  - 与豆棕油联动强，单边行情常被油脂板块带动
+reviewed: true
+reviewed_by: ai

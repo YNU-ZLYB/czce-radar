@@ -1,0 +1,28 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# ---- Node ----
+node_modules/
+apps/web/dist/
+apps/web/.vite/
+
+# ---- 环境与密钥（绝不入库）----
+.env
+.env.*
+!.env.example
+
+# ---- 运行产物 ----
+*.log
+.coverage
+htmlcov/
+backtest/*.json
+data/cache/
+models/

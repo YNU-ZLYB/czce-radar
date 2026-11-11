@@ -1,0 +1,51 @@
+# 白糖 SR · 产业链知识（来源：v1 手册 §三.1 / §五）
+code: SR
+name: 白糖
+sector: 软商品
+linkage_q: 0.0 # v1 回测：ICE 原糖新浪 2019 年后停更，无法校准（51.6% 不显著）
+chain:
+  upstream: [甘蔗（广西/云南）, 甜菜（内蒙/新疆）, 进口原糖（巴西/泰国/印度）]
+  midstream: [糖厂压榨, 加工糖厂]
+  downstream: [食品饮料, 民用消费]
+drivers:
+  - name: ICE 原糖
+    kind: cost
+    prior: 0.60
+    mechanism: 进口成本锚；ICE #11 暂无可用免费日频源（新浪停更），仅记录机理
+  - name: 布伦特原油
+    kind: cost
+    proxy_ext: OIL
+    prior: 0.15
+    mechanism: 巴西乙醇平价比，影响糖厂制糖/制醇比例
+  - name: 美元指数
+    kind: cost
+    proxy_ext: DX
+    prior: 0.05
+    mechanism: 进口计价（FRED 广义美元指数日频替代）
+seasonality:
+  - stage: 开榨压力
+    months: [11, 12]
+    bias: -2.0
+    confidence: 0.4
+    note: 新糖集中上市
+  - stage: 消费旺季
+    months: [5, 6, 7, 8]
+    bias: 2.0
+    confidence: 0.4
+    note: 夏季饮料用糖高峰
+  - stage: 青黄不接
+    months: [9, 10]
+    bias: 2.5
+    confidence: 0.3
+    note: 陈糖去化、新糖未上，易涨
+events:
+  - 巴西 UNICA 双周报
+  - 印度/泰国产量与出口政策
+  - 国家收储/抛储
+  - 广西霜冻天气
+risk_notes:
+  - ICE 原糖与美元源缺失，传导层暂不可算（q=0）
+  - 淀粉糖替代（关注玉米-白糖价差）
+  - 走私糖冲击口径难以量化
+reviewed: true
+reviewed_by: ai

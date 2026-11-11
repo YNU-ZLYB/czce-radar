@@ -1,0 +1,44 @@
+# 玻璃 FG · 产业链知识（来源：v1 手册 §三.6 / §五）
+code: FG
+name: 玻璃
+sector: 能源化工
+linkage_q: 0.0 # v1 回测：日频外盘传导被证伪（48.0%），不展示传导行
+chain:
+  upstream: [纯碱, 天然气, 石油焦]
+  midstream: [浮法玻璃产线]
+  downstream: [地产竣工, 汽车, 光伏组件]
+drivers:
+  - name: 纯碱
+    kind: cost
+    proxy_variety: SA
+    prior: 0.30
+    mechanism: 主要原料成本
+  - name: 地产销售与竣工
+    kind: demand
+    prior: 0.35
+    mechanism: 竣工端决定浮法需求（无日频价格代理）
+  - name: NYMEX 天然气
+    kind: cost
+    proxy_ext: NG
+    prior: 0.15
+    mechanism: 燃料成本
+seasonality:
+  - stage: 金九银十
+    months: [9, 10]
+    bias: 2.5
+    confidence: 0.4
+    note: 竣工旺季
+  - stage: 梅雨需求停滞
+    months: [6, 7]
+    bias: -2.0
+    confidence: 0.4
+    note: 施工停滞，产销率走弱
+events:
+  - 浮法日熔量变化
+  - 冷修/点火公告
+  - 保交楼与地产政策
+risk_notes:
+  - q=0：外盘传导日频证伪
+  - 供给刚性（产线不易停产），累库周期长
+reviewed: true
+reviewed_by: ai

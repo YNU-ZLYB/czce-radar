@@ -1,0 +1,33 @@
+# 丙烯 PL · 产业链知识（来源：v1 手册 §三.21 / §五）
+code: PL
+name: 丙烯
+sector: 能源化工
+linkage_q: 0.89 # v1 回测样本外命中率 67.7%
+chain:
+  upstream: [石脑油裂解, 丙烷（PDH）, 煤制烯烃]
+  midstream: [丙烯装置]
+  downstream: [聚丙烯 PP, 环氧丙烷, 丙烯腈, 丁辛醇]
+drivers:
+  - name: 布伦特原油
+    kind: cost
+    proxy_ext: OIL
+    prior: 0.50
+    mechanism: 石脑油裂解路径成本锚
+  - name: 丙烷（FEI）
+    kind: cost
+    prior: 0.25
+    mechanism: PDH 利润核心变量；CP/FEI 暂无免费日频源，仅记录机理
+  - name: 聚丙烯（PP）
+    kind: demand
+    prior: 0.20
+    mechanism: 下游 PP 开工与利润（大商所品种，暂无免费日频源）
+seasonality: []
+events:
+  - PDH 装置检修/投产
+  - 丙烷 CP/FEI 合同价
+  - PP 旺季订单
+risk_notes:
+  - 新产能集中投产周期，反弹高度受限
+  - 地缘敏感度 ★★★★☆（丙烷依赖中东/美国）
+reviewed: true
+reviewed_by: ai

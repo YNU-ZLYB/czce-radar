@@ -1,0 +1,46 @@
+# 棉花 CF · 产业链知识（来源：v1 手册 §三.2 / §五）
+code: CF
+name: 棉花
+sector: 软商品
+linkage_q: 0.84 # v1 回测样本外命中率 66.7%
+chain:
+  upstream: [籽棉（新疆占全国 90%+）]
+  midstream: [轧花厂]
+  downstream: [纺企, 纱布, 服装出口]
+drivers:
+  - name: ICE 美棉
+    kind: cost
+    proxy_ext: CT
+    prior: 0.65
+    mechanism: 全球棉价定价锚
+  - name: 涤纶短纤
+    kind: substitute
+    proxy_variety: PF
+    prior: 0.10
+    mechanism: 棉涤价差替代效应
+  - name: 美元指数
+    kind: cost
+    proxy_ext: DX
+    prior: 0.05
+    mechanism: 进口配额计价（FRED 广义美元指数日频替代）
+seasonality:
+  - stage: 新棉上市压力
+    months: [9, 10, 11]
+    bias: -2.0
+    confidence: 0.4
+    note: 收购季供给集中
+  - stage: 纺织旺季
+    months: [3, 4, 5]
+    bias: 2.0
+    confidence: 0.3
+    note: 春夏订单下单高峰
+events:
+  - USDA WASDE（每月 10 日左右）
+  - 新疆播种与采收天气
+  - 滑准税配额政策
+  - 轮入轮出
+risk_notes:
+  - 仓单与现货价差需固定口径
+  - 抢收年份收购价对盘面传导放大
+reviewed: true
+reviewed_by: ai

@@ -1,0 +1,55 @@
+services:
+  - type: web
+    name: czce-radar-api
+    runtime: docker
+    dockerfilePath: ./infra/Dockerfile
+    dockerContext: .
+    plan: free
+    # 存活探针只验证进程可响应；db/redis 状态看 /ready
+    healthCheckPath: /live
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: API_TOKEN
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false
+      # 容器入口默认执行 alembic upgrade head，无需额外 release 步骤
+      - key: RUN_MIGRATIONS
+        value: "1"
+
+  - type: worker
+    name: czce-radar-worker
+    runtime: docker
+    dockerfilePath: ./infra/Dockerfile
+    dockerContext: .
+    dockerCommand: arq jobs.worker.WorkerSettings
+    plan: free
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: API_TOKEN
+        sync: false
+      - key: RUN_MIGRATIONS
+        value: "0"
+
+  - type: web
+    name: czce-radar-web
+    runtime: static
+    buildCommand: cd apps/web && npm ci && npm run build
+    staticPublishPath: apps/web/dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

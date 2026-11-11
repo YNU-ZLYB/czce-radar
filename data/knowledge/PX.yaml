@@ -1,0 +1,34 @@
+# PX 对二甲苯 · 产业链知识（来源：v1 手册 §三.7 / §五）
+code: PX
+name: 对二甲苯
+sector: 能源化工
+linkage_q: 0.73 # v1 回测样本外命中率 64.6%
+chain:
+  upstream: [原油, 石脑油]
+  midstream: [亚洲 PX 装置]
+  downstream: [PTA, 聚酯]
+drivers:
+  - name: 布伦特原油
+    kind: cost
+    proxy_ext: OIL
+    prior: 0.65
+    mechanism: 石脑油裂解价差直接决定 PX 成本
+  - name: 石脑油
+    kind: cost
+    prior: 0.20
+    mechanism: PX-石脑油加工费是核心利润指标；暂无免费日频外盘源，仅记录机理
+  - name: PTA
+    kind: demand
+    proxy_variety: TA
+    prior: 0.15
+    mechanism: 下游 PTA 开工与利润反向传导 PX 需求
+seasonality: []
+events:
+  - OPEC 会议
+  - 亚洲装置检修季（春秋两季）
+  - 日韩进口量与报价变化
+risk_notes:
+  - 进口依赖度高（日韩），地缘敏感度 ★★★★★
+  - 新装置投产后加工费中枢下移
+reviewed: true
+reviewed_by: ai

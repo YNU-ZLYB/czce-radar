@@ -1,0 +1,36 @@
+# PTA · 产业链知识（来源：v1 手册 §三.8 / §五）
+code: TA
+name: PTA
+sector: 能源化工
+linkage_q: 0.71 # v1 回测样本外命中率 64.2%
+chain:
+  upstream: [石脑油, PX]
+  midstream: [PTA 装置]
+  downstream: [聚酯长丝, 聚酯短纤, 瓶片, 纺织服装]
+drivers:
+  - name: 布伦特原油
+    kind: cost
+    proxy_ext: OIL
+    prior: 0.55
+    mechanism: 石脑油-PX-PTA 成本链最上游，能化情绪联动
+  - name: PX
+    kind: cost
+    proxy_variety: PX
+    prior: 0.30
+    mechanism: PX 加工费与价格直接决定 PTA 成本
+  - name: 聚酯开工率
+    kind: demand
+    metric: opening_rate
+    prior: 0.15
+    mechanism: 聚酯开工决定 PTA 现货需求（日频用检修公告频次代理）
+seasonality: []
+events:
+  - OPEC 会议
+  - 亚洲 PX 装置检修计划
+  - 聚酯工厂减产检修公告
+  - 新产能投放
+risk_notes:
+  - 新产能投放周期未结束，成本推涨易被增产对冲
+  - 地缘敏感度 ★★★★☆
+reviewed: true
+reviewed_by: ai

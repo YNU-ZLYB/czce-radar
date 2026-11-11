@@ -1,0 +1,32 @@
+# 锰硅 SM · 产业链知识（来源：v1 手册 §三.20 / §五）
+code: SM
+name: 锰硅
+sector: 黑色
+linkage_q: 0.0 # v1 回测样本不足（20 条）未校准，不展示传导行
+chain:
+  upstream: [锰矿（南非/澳洲/加蓬）, 焦炭, 电力]
+  midstream: [矿热炉]
+  downstream: [钢厂]
+drivers:
+  - name: 锰矿
+    kind: cost
+    prior: 0.40
+    mechanism: 矿端供应事件（South32 等）可主导行情；暂无免费日频源
+  - name: 螺纹钢
+    kind: demand
+    prior: 0.30
+    mechanism: 钢厂需求（上期所品种，暂无免费日频源）
+  - name: 产区电价
+    kind: cost
+    prior: 0.20
+    mechanism: 内蒙/广西电价调整影响成本
+seasonality: []
+events:
+  - 南非/澳洲锰矿发运
+  - 钢厂招标价
+  - 限电政策
+risk_notes:
+  - 单一矿端事件可主导行情（2024 South32 事件）
+  - q=0（样本不足未校准）
+reviewed: true
+reviewed_by: ai

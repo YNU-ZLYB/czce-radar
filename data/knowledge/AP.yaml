@@ -1,0 +1,29 @@
+# 苹果 AP · 产业链知识（来源：v1 手册 §三.16 / §五）
+code: AP
+name: 苹果
+sector: 农副
+linkage_q: 0.0 # 气候驱动型，无外盘对标，传导层不适用
+chain:
+  upstream: [种植（陕西/山东）]
+  midstream: [冷库]
+  downstream: [批发, 零售]
+drivers:
+  - name: 花期霜冻与冰雹
+    kind: weather
+    prior: 0.0
+    mechanism: 4–5 月花期天气是全年最大变量，事件驱动，无常规偏移；仅记录机理不参与计分
+  - name: 冷库去库速度
+    kind: demand
+    metric: inventory
+    prior: 0.0
+    mechanism: 入库量与去库速度决定近月强弱；仅记录机理不参与计分
+seasonality: []
+events:
+  - 4–5 月花期霜冻窗口
+  - 8 月套袋与优果率调研
+  - 10–11 月入库定产
+  - 替代水果（梨/柑橘）行情
+risk_notes:
+  - 气候驱动型品种，无稳定季节规律可入模，季节性偏移置空
+reviewed: true
+reviewed_by: ai

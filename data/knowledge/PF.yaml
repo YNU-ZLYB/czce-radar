@@ -1,0 +1,43 @@
+# 短纤 PF · 产业链知识（来源：v1 手册 §三.10 / §五）
+code: PF
+name: 短纤
+sector: 能源化工
+linkage_q: 0.77 # v1 回测样本外命中率 65.3%
+chain:
+  upstream: [PTA, 乙二醇]
+  midstream: [涤纶短纤装置]
+  downstream: [纱线, 无纺布, 织造]
+drivers:
+  - name: 布伦特原油
+    kind: cost
+    proxy_ext: OIL
+    prior: 0.50
+    mechanism: 聚酯链成本最上游
+  - name: PTA
+    kind: cost
+    proxy_variety: TA
+    prior: 0.25
+    mechanism: 直接原料成本
+  - name: 棉花
+    kind: substitute
+    proxy_variety: CF
+    prior: 0.10
+    mechanism: 棉涤价差走阔时替代需求变化
+seasonality:
+  - stage: 纺织旺季
+    months: [9, 10, 11]
+    bias: 1.5
+    confidence: 0.3
+    note: 金九银十终端订单集中
+  - stage: 高温淡季
+    months: [6, 7, 8]
+    bias: -1.0
+    confidence: 0.3
+    note: 织造开机率回落
+events:
+  - 终端服装订单数据
+  - 纯涤纱开工率
+risk_notes:
+  - 与棉花价差走阔时替代需求反转
+reviewed: true
+reviewed_by: ai

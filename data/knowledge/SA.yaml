@@ -1,0 +1,44 @@
+# 纯碱 SA · 产业链知识（来源：v1 手册 §三.5 / §五）
+code: SA
+name: 纯碱
+sector: 能源化工
+linkage_q: 0.0 # v1 回测：日频外盘传导被证伪（44.4%），不展示传导行
+chain:
+  upstream: [原盐, 石灰石, 天然气, 动力煤]
+  midstream: [氨碱/联碱/天然碱装置]
+  downstream: [浮法玻璃, 光伏玻璃, 碳酸锂, 洗涤剂]
+drivers:
+  - name: 玻璃
+    kind: demand
+    proxy_variety: FG
+    prior: 0.35
+    mechanism: 重碱需求跟随玻璃日熔量（浮法+光伏）
+  - name: NYMEX 天然气
+    kind: cost
+    proxy_ext: NG
+    prior: 0.30
+    mechanism: 天然气+煤合计 0.30（煤无外盘日频代理，权重计在天然气）
+  - name: 光伏装机
+    kind: demand
+    prior: 0.15
+    mechanism: 光伏玻璃点火拉动重碱新需求（无日频价格代理）
+seasonality:
+  - stage: 春节累库
+    months: [1, 2]
+    bias: -2.0
+    confidence: 0.3
+    note: 下游停工，厂库累积
+  - stage: 夏季检修
+    months: [6, 7, 8]
+    bias: 2.0
+    confidence: 0.4
+    note: 集中检修季供给收缩
+events:
+  - 集中检修计划
+  - 天然碱新产能投放
+  - 光伏玻璃点火/冷修
+risk_notes:
+  - q=0：外盘传导日频证伪，重碱看国内供需
+  - 天然碱产能扩张是长期利空主线
+reviewed: true
+reviewed_by: ai

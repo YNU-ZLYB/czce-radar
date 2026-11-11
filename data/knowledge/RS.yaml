@@ -1,0 +1,27 @@
+# 油菜籽 RS · 产业链知识（来源：v1 手册 §三.15 / §五）
+code: RS
+name: 油菜籽
+sector: 油脂油料
+linkage_q: 0.38 # v1 回测样本外命中率 57.6%
+chain:
+  upstream: [加拿大菜籽（进口）, 国产菜籽]
+  midstream: [压榨厂]
+  downstream: [菜油, 菜粕]
+drivers:
+  - name: 加拿大菜籽
+    kind: cost
+    prior: 0.60
+    mechanism: ICE 菜籽无免费日频源，进口成本逻辑为主，仅记录机理
+  - name: CBOT 大豆
+    kind: cost
+    proxy_ext: S
+    prior: 0.20
+    mechanism: 油籽板块联动
+seasonality: []
+events:
+  - 加拿大产量报告
+  - 进口船期与压榨利润
+risk_notes:
+  - 流动性极差（★），不建议单独作为交易依据，仅作菜油/菜粕原料端参考
+reviewed: true
+reviewed_by: ai

@@ -1,0 +1,47 @@
+# 甲醇 · 产业链知识（来源：v1 手册 §三.4 / §五）
+# reviewed: true = 已核实（2026-11-10 逐条对照 v1 手册与回测报告，用户授权）
+code: MA
+name: 甲醇
+sector: 能源化工
+linkage_q: 0.58 # v1 回测样本外命中率 61.5%
+chain:
+  upstream: [动力煤, 天然气, 伊朗进口气源]
+  midstream: [甲醇装置, 华东港口库存]
+  downstream: [MTO 烯烃, 甲醛, 醋酸, 二甲醚, 燃料]
+drivers:
+  - name: 布伦特原油
+    kind: cost
+    proxy_ext: OIL
+    prior: 0.45
+    mechanism: 油制甲醇成本抬升，且能化板块情绪联动
+  - name: NYMEX 天然气
+    kind: cost
+    proxy_ext: NG
+    prior: 0.30
+    mechanism: 海外气头装置成本与伊朗进口预期
+  - name: 聚丙烯（PP）
+    kind: demand
+    prior: 0.20
+    mechanism: MTO 装置利润与烯烃需求；PP 为烯烃端代表（大商所品种，暂无免费日频源）
+seasonality:
+  - stage: 冬季限气
+    months: [11, 12, 1, 2, 3]
+    bias: 3.0
+    confidence: 0.5
+    note: 伊朗/国内气头降负，供给收缩（需当年兑现验证）
+  - stage: 梅雨累库
+    months: [6, 7]
+    bias: -2.0
+    confidence: 0.3
+    note: 传统需求淡季，港口易累库
+events:
+  - OPEC 会议
+  - 伊朗出口政策与地缘冲突
+  - 国内能耗双控政策
+  - 华东港口库存拐点
+risk_notes:
+  - 煤制利润修复后开工回升快，供给弹性大
+  - 港口库存与社会库存口径差异大，需固定口径
+  - 地缘敏感度 ★★★★★（中东、霍尔木兹、制裁）
+reviewed: true
+reviewed_by: ai
