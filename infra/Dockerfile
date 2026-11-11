@@ -18,7 +18,8 @@ COPY packages ./packages
 COPY migrations ./migrations
 COPY infra/entrypoint.sh /usr/local/bin/czce-entrypoint
 
-RUN pip install . \
+ARG PIP_INDEX_URL=""
+RUN pip install ${PIP_INDEX_URL:+--index-url ${PIP_INDEX_URL}} . \
     && chmod +x /usr/local/bin/czce-entrypoint
 
 RUN useradd --create-home --uid 10001 appuser \

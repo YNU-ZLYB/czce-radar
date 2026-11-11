@@ -1,0 +1,98 @@
+name: czce-radar
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-czce}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 deploy/.env 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-czce}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # 不映射端口到宿主机：只有同网络的 api/worker 能访问
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-czce} -d ${POSTGRES_DB:-czce}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["redis-server", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    image: czce-radar-api:prod
+    restart: unless-stopped
+    logging: *default-logging
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      args:
+        # 国内构建加速；留空则用官方 PyPI
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-czce}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-czce}
+      REDIS_URL: redis://redis:6379/0
+      RUN_MIGRATIONS: "1"
+      CORS_ORIGINS: '["http://${PUBLIC_HOST:-localhost}"]'
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: czce-radar-api:prod
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["arq", "jobs.worker.WorkerSettings"]
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-czce}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-czce}
+      REDIS_URL: redis://redis:6379/0
+      RUN_MIGRATIONS: "0"
+    healthcheck:
+      disable: true
+    depends_on:
+      api:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    image: czce-radar-web:prod
+    restart: unless-stopped
+    logging: *default-logging
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      api:
+        condition: service_started
+
+volumes:
+  pgdata:
