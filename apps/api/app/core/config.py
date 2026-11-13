@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # 资讯 LLM 抽取（可选）：无 key 时只用规则抽取，成本为 0
     llm_api_key: str | None = None
     llm_base_url: str = "https://api.deepseek.com"
-    llm_model: str = "deepseek-chat"
+    llm_model: str = "deepseek-v4-flash"
     llm_daily_budget_cny: float = 5.0
     llm_price_in_cny_per_1k: float = 0.001
     llm_price_out_cny_per_1k: float = 0.002
