@@ -44,7 +44,7 @@ from jobs.collectors.news import (
     Jin10FlashCollector,
     SinaNewsCollector,
 )
-from jobs.collectors.sina_daily import SinaDailyKlineCollector
+from jobs.collectors.sina_daily import SinaDailyKlineCollector, today_cn
 from jobs.collectors.sina_quote import SinaQuoteCollector
 from jobs.features.build import build_varieties
 from jobs.heartbeat import write_heartbeat
@@ -117,17 +117,32 @@ async def ensure_quote_partitions(ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 async def collect_daily_bars(ctx: dict[str, Any]) -> dict[str, Any]:
-    """15:10 CST：21 个品种日线回补/更新，幂等。"""
+    """15:10 / 19:20 CST：21 个品种日线回补/更新，幂等。
+
+    跳过条件按"目标交易日是否已入库"判断，而非按上次运行时间：
+    日线采集器 interval_sec=86400，若沿用 last_run_at 限流，盘中手动补跑一次
+    就会把当日收盘后的 cron 一起挡掉，导致当日日线永远缺一根。
+    """
     session_factory = ctx["session_factory"]
+    today = today_cn()
     results: dict[str, int] = {}
     errors: list[str] = []
     for variety_code, symbol in DOMESTIC_SINA_SYMBOLS.items():
         collector: BaseCollector = SinaDailyKlineCollector(ctx["http"], symbol)
         try:
             async with session_factory() as session, session.begin():
-                last_run = await _last_run_at(session, collector.code)
+                has_today = await session.scalar(
+                    text(
+                        "SELECT 1 FROM daily_bar"
+                        " WHERE variety_code = :code AND trade_date >= :day LIMIT 1"
+                    ),
+                    {"code": variety_code, "day": today},
+                )
+                if has_today:
+                    results[variety_code] = 0
+                    continue
                 ingest = _daily_ingest_for(variety_code)
-                result = await collector.run(session, ingest, last_run_at=last_run)
+                result = await collector.run(session, ingest)
             if result.status == "error":
                 errors.append(f"{variety_code}: {result.error}")
             else:
@@ -340,8 +355,9 @@ class WorkerSettings:
         cron(collect_quotes, second={0}, run_at_startup=True),
         # 分区预建：00:05 CST
         cron(ensure_quote_partitions, hour={16}, minute={5}, run_at_startup=True),
-        # 日线：15:10 CST（rate-guard 保证一天只真正跑一轮）
+        # 日线：15:10 CST + 19:20 CST 补采（数据源更新晚时由第二次兜底）
         cron(collect_daily_bars, hour={7}, minute={10}, run_at_startup=True),
+        cron(collect_daily_bars, hour={11}, minute={20}, run_at_startup=False),
         # 外盘日线聚合：08:10 CST（聚合昨日 UTC）
         cron(aggregate_foreign_daily, hour={0}, minute={10}, run_at_startup=True),
         # FRED 美元指数：08:10 CST（整段回补，幂等）
