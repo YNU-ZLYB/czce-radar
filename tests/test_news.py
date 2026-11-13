@@ -272,7 +272,9 @@ class _FakeLLM:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def extract(self, title: str, content: str | None) -> tuple[str, int, int]:
+    async def extract(
+        self, title: str, content: str | None, *, system_extra: str = ""
+    ) -> tuple[str, int, int]:
         self.calls += 1
         raw = json.dumps(
             {
@@ -313,7 +315,7 @@ async def test_llm_cache_hit_and_budget(db_session) -> None:  # type: ignore[no-
     client = _FakeLLM()
 
     first = await run_llm_extraction(
-        db_session, docs, client, model="fake", valid_codes=set(aliases), now=NOW
+        db_session, docs, client, model="fake", aliases=aliases, now=NOW
     )
     assert first.calls == 3
     assert first.cache_hits == 0
@@ -321,7 +323,7 @@ async def test_llm_cache_hit_and_budget(db_session) -> None:  # type: ignore[no-
 
     # 同一批文档重跑 → 全部命中缓存
     second = await run_llm_extraction(
-        db_session, docs, client, model="fake", valid_codes=set(aliases), now=NOW
+        db_session, docs, client, model="fake", aliases=aliases, now=NOW
     )
     assert second.calls == 0
     assert second.cache_hits == 3
@@ -345,7 +347,7 @@ async def test_llm_cache_hit_and_budget(db_session) -> None:  # type: ignore[no-
     docs2 = await load_recent_docs(db_session, since=NOW - dt.timedelta(hours=1))
     before = client.calls
     third = await run_llm_extraction(
-        db_session, docs2, client, model="fake", valid_codes=set(aliases), now=NOW
+        db_session, docs2, client, model="fake", aliases=aliases, now=NOW
     )
     assert third.degraded is True
     assert client.calls == before  # 未发生新调用

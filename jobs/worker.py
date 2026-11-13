@@ -289,7 +289,7 @@ async def process_news(ctx: dict[str, Any]) -> dict[str, Any]:
                 docs,
                 client,
                 model=_settings.llm_model,
-                valid_codes=set(aliases),
+                aliases=aliases,
                 budget_cny=_settings.llm_daily_budget_cny,
                 price_in_per_1k=_settings.llm_price_in_cny_per_1k,
                 price_out_per_1k=_settings.llm_price_out_cny_per_1k,
@@ -298,6 +298,7 @@ async def process_news(ctx: dict[str, Any]) -> dict[str, Any]:
             result["llm"] = {
                 "calls": stats.calls,
                 "cache_hits": stats.cache_hits,
+                "skipped": stats.skipped,
                 "cache_hit_rate": stats.cache_hit_rate,
                 "cost_cny": stats.cost_cny,
                 "degraded": stats.degraded,
