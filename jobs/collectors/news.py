@@ -1,4 +1,4 @@
-"""资讯采集器：金十 60s / 东财 120s / 新浪 7×24 120s / 郑商所公告 30min。
+"""资讯采集器：财联社 60s / 金十 60s / 东财 120s / 新浪 7×24 120s / 郑商所公告 30min。
 
 约定：只负责拿到 RawItem；清洗、去重、入库在 jobs/ingest/news.py。
 网络/接口变化一律由 BaseCollector 的重试与 fetch_log 兜底，不向上抛异常。
@@ -7,11 +7,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import logging
 import re
 from typing import Any, ClassVar
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 
 from jobs.collectors.base import BaseCollector, RawItem
 
@@ -189,6 +190,85 @@ def parse_sina_news(payload: Any) -> list[RawItem]:
                     "title": content[:80],
                     "content": content,
                     "url": row.get("docurl") or row.get("url"),
+                },
+            )
+        )
+    return items
+
+
+class ClsTelegraphCollector(BaseCollector):
+    """财联社电报（cls.cn 公开接口，参数需 sign 签名）。
+
+    与 AKShare ``stock_info_global_cls`` 同源，但直接用 httpx 实现，
+    不引入 akshare 的重量级依赖（V8 等）。
+    """
+
+    code: ClassVar[str] = "cls_telegraph"
+    name: ClassVar[str] = "财联社电报"
+    kind: ClassVar[str] = "news"
+    interval_sec: ClassVar[int] = 60
+
+    URL: ClassVar[str] = "https://www.cls.cn/v1/roll/get_roll_list"
+    HEADERS: ClassVar[dict[str, str]] = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://www.cls.cn/telegraph",
+    }
+
+    async def fetch(self) -> list[RawItem]:
+        params: dict[str, str] = {
+            "app": "CailianpressWeb",
+            "category": "",
+            "last_time": "",
+            "os": "web",
+            "refresh_type": "1",
+            "rn": "30",
+            "sv": "7.7.5",
+        }
+        params["sign"] = cls_sign(params)
+        response = await self._http.get(self.URL, params=params, headers=self.HEADERS)
+        response.raise_for_status()
+        return parse_cls(response.json())
+
+
+def cls_sign(params: dict[str, str]) -> str:
+    """财联社签名：md5(sha1(按 key 排序的 querystring))。"""
+    query = urlencode(sorted(params.items()))
+    return hashlib.md5(hashlib.sha1(query.encode()).hexdigest().encode()).hexdigest()
+
+
+def parse_cls(payload: Any) -> list[RawItem]:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    rows = data.get("roll_data") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return []
+    items: list[RawItem] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ad = row.get("ad")
+        # ad 字段是占位 dict（id=0）时不是广告，只有 id 非 0 才是
+        if row.get("is_ad") or (isinstance(ad, dict) and ad.get("id")):
+            continue
+        external_id = str(row.get("id") or "").strip()
+        content = _text(str(row.get("brief") or row.get("content") or ""))
+        if not external_id or not content:
+            continue
+        try:
+            ts = dt.datetime.fromtimestamp(int(row.get("ctime") or 0), dt.UTC)
+        except (TypeError, ValueError, OSError):
+            ts = None
+        items.append(
+            RawItem(
+                source=ClsTelegraphCollector.code,
+                external_id=external_id,
+                ts=ts,
+                payload={
+                    "title": _text(str(row.get("title") or "")) or content[:80],
+                    "content": content,
+                    "url": row.get("shareurl") or f"https://www.cls.cn/detail/{external_id}",
                 },
             )
         )

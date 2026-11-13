@@ -38,6 +38,7 @@ from jobs.collectors.base import BaseCollector
 from jobs.collectors.czce_receipt import CzceReceiptCollector
 from jobs.collectors.fred import FredDollarIndexCollector
 from jobs.collectors.news import (
+    ClsTelegraphCollector,
     CzceAnnouncementCollector,
     EastmoneyNewsCollector,
     Jin10FlashCollector,
@@ -246,6 +247,10 @@ async def _run_news_collector(ctx: dict[str, Any], collector: BaseCollector) -> 
     return {"status": result.status, "fetched": result.fetched, "inserted": result.inserted}
 
 
+async def collect_news_cls(ctx: dict[str, Any]) -> dict[str, Any]:
+    return await _run_news_collector(ctx, ClsTelegraphCollector(ctx["http"]))
+
+
 async def collect_news_jin10(ctx: dict[str, Any]) -> dict[str, Any]:
     return await _run_news_collector(ctx, Jin10FlashCollector(ctx["http"]))
 
@@ -320,6 +325,7 @@ class WorkerSettings:
         scorecard_daily,
         weekly_report,
         train_weekly,
+        collect_news_cls,
         collect_news_jin10,
         collect_news_eastmoney,
         collect_news_sina,
@@ -353,7 +359,8 @@ class WorkerSettings:
         cron(weekly_report, weekday={0}, hour={1}, minute={0}, run_at_startup=False),
         # GBM 周度重训：周一 03:00 CST = 周日 19:00 UTC（数据到上周五收盘）
         cron(train_weekly, weekday={6}, hour={19}, minute={0}, run_at_startup=False),
-        # 资讯采集：金十 60s；东财/新浪 120s；郑商所公告 30min（尽力，失败不阻塞）
+        # 资讯采集：财联社/金十 60s；东财/新浪 120s；郑商所公告 30min（尽力，失败不阻塞）
+        cron(collect_news_cls, second={0}, run_at_startup=True),
         cron(collect_news_jin10, second={0}, run_at_startup=False),
         cron(collect_news_eastmoney, minute=set(range(0, 60, 2)), run_at_startup=False),
         cron(collect_news_sina, minute=set(range(0, 60, 2)), run_at_startup=False),

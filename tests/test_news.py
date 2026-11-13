@@ -10,6 +10,8 @@ from sqlalchemy import text
 
 from jobs.collectors.base import RawItem
 from jobs.collectors.news import (
+    cls_sign,
+    parse_cls,
     parse_czce_announcements,
     parse_eastmoney,
     parse_jin10,
@@ -83,6 +85,39 @@ def test_parse_sina_news() -> None:
     items = parse_sina_news(payload)
     assert len(items) == 1
     assert items[0].ts == dt.datetime(2026, 11, 10, 3, 0, tzinfo=dt.UTC)
+
+
+def test_cls_sign_is_stable() -> None:
+    params = {"app": "CailianpressWeb", "os": "web", "rn": "20", "sv": "7.7.5"}
+    assert cls_sign(params) == cls_sign(dict(reversed(list(params.items()))))
+
+
+def test_parse_cls() -> None:
+    payload = {
+        "data": {
+            "roll_data": [
+                {
+                    "id": 2533734,
+                    "title": "国务院安委办对11个市级政府开展安全生产约谈",
+                    "brief": "【国务院安委办…】财联社11月13日电，从应急管理部获悉。",
+                    "ctime": "1794552897",
+                    "shareurl": "https://api3.cls.cn/share/article/2533734?os=web",
+                    "is_ad": False,
+                    "ad": {"id": 0, "title": "", "url": ""},
+                },
+                {"id": 1, "brief": "广告", "is_ad": True},
+                {"id": 3, "brief": "广告位", "ad": {"id": 77}},
+                {"id": 2, "brief": "", "is_ad": False},
+            ]
+        }
+    }
+    items = parse_cls(payload)
+    assert len(items) == 1
+    item = items[0]
+    assert item.source == "cls_telegraph"
+    assert item.external_id == "2533734"
+    assert item.ts == dt.datetime.fromtimestamp(1794552897, dt.UTC)
+    assert item.payload["url"].startswith("https://api3.cls.cn/share/article/2533734")
 
 
 def test_parse_czce_announcements() -> None:
