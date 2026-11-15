@@ -47,7 +47,7 @@ from jobs.predict.metrics import (
     v1_diagnostic,
     walk_forward,
 )
-from jobs.predict.rules import classify_bucket, direction_of, score
+from jobs.predict.rules import bands, classify_bucket, direction_of, score
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "docs" / "backtest"
@@ -203,8 +203,13 @@ def _build_records(
     since: dt.date,
     until: dt.date,
     q_mode: str = "pit",
+    detail: list[dict[str, Any]] | None = None,
 ) -> list[BacktestRecord]:
-    """q_mode: pit=时点命中率（不偷看未来），static=YAML 全样本 q（含泄漏，仅参照）。"""
+    """q_mode: pit=时点命中率（不偷看未来），static=YAML 全样本 q（含泄漏，仅参照）。
+
+    ``detail`` 非空时，逐日追加一行中间量（exp_change / 阈值 / 有效权重），
+    供 ``scripts.coverage_audit`` 做覆盖率归因，不影响返回的 records。
+    """
     if len(bars) < 22:
         return []
     closes = [c for _, c in bars]
@@ -264,6 +269,22 @@ def _build_records(
             }
             out = score(features, missing_foreign=missing)
             actual_bucket = classify_bucket(actual_change, sigma)
+            if detail is not None:
+                eff_weight = sum(float(x["prior"]) * float(x["q"]) for x in linkage if x["q"] > 0)
+                detail.append(
+                    {
+                        "code": code,
+                        "day": day,
+                        "exp_change": out.exp_change,
+                        "flat_band": bands(sigma)[0],
+                        "eff_weight": eff_weight,
+                        "n_edges": len(linkage),
+                        "n_eff_edges": sum(1 for x in linkage if x["q"] > 0),
+                        "direction": out.direction,
+                        "actual_change": actual_change,
+                        "actual_dir": direction_of(actual_bucket),
+                    }
+                )
             records.append(
                 BacktestRecord(
                     variety_code=code,
