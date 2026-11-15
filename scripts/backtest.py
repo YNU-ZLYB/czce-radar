@@ -484,11 +484,12 @@ def _render_band_cmp(cmp: dict[str, Any]) -> str:
     scope = "全部品种" if codes is None else f"{len(codes)} 个品种：{' '.join(codes)}"
 
     def row(label: str, base: dict[str, Any], new: dict[str, Any]) -> str:
-        acc_b = "—" if base["direction_accuracy"] is None else f"{base['direction_accuracy']:.1f}"
-        acc_n = "—" if new["direction_accuracy"] is None else f"{new['direction_accuracy']:.1f}"
+        acc_b = "—" if base["direction_accuracy"] is None else f"{base['direction_accuracy'] * 100:.1f}"
+        acc_n = "—" if new["direction_accuracy"] is None else f"{new['direction_accuracy'] * 100:.1f}"
         return (
             f"| {label} | {base['coverage'] * 100:.1f} | {new['coverage'] * 100:.1f} | "
-            f"{acc_b} | {acc_n} | {base['brier']:.4f} | {new['brier']:.4f} |"
+            f"{acc_b} | {acc_n} | {base['brier_direction']:.4f} | {new['brier_direction']:.4f} | "
+            f"{base['ece']:.4f} | {new['ece']:.4f} |"
         )
 
     return "\n".join(
@@ -497,13 +498,15 @@ def _render_band_cmp(cmp: dict[str, Any]) -> str:
             "## 震荡带缩放实验",
             "",
             f"- 缩放系数 {cmp['scale']}（震荡带 ×{cmp['scale']}），范围：{scope}",
+            "- 正文「整体指标」用的是缩放后的阈值；本节「原」列才是默认阈值。",
+            "- 口径与正文一致：方向命中=排除横盘预测后的二分类命中；Brier 为方向 Brier。",
             "",
-            "| 区间 | 覆盖率% 原 | 覆盖率% 新 | 方向命中% 原 | 方向命中% 新 | Brier 原 | Brier 新 |",
-            "|---|---|---|---|---|---|---|",
+            "| 区间 | 覆盖率% 原 | 覆盖率% 新 | 方向命中% 原 | 方向命中% 新 | 方向Brier 原 | 方向Brier 新 | ECE 原 | ECE 新 |",
+            "|---|---|---|---|---|---|---|---|---|",
             row("开发集", cmp["base_dev"], cmp["new_dev"]),
             row("holdout", cmp["base_holdout"], cmp["new_holdout"]),
             "",
-            "判读：覆盖率上升且 holdout 命中率不塌、Brier 不升，才值得上线。",
+            "判读：覆盖率上升且 holdout 命中率不塌、方向 Brier 不升，才值得上线。",
             "",
         ]
     )
