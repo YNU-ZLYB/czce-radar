@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING, ClassVar
 
+import xlrd
 from openpyxl import load_workbook
 
 from czce_schema.symbols import BEIJING
@@ -25,13 +27,18 @@ if TYPE_CHECKING:
     import httpx
 
 CXCE_TEMPLATE = (
-    "https://www.czce.com.cn/cn/DFSStaticFiles/Future/{year}/{ymd}/FutureDataWhsheet.xlsx"
+    "https://www.czce.com.cn/cn/DFSStaticFiles/Future/{year}/{ymd}/FutureDataWhsheet.{ext}"
 )
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     " (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 )
 MAX_LOOKBACK_DAYS = 6
+
+#: 2026 起官网只给 .xlsx；更早的日期只有 .xls（BIFF8）
+EXTS: tuple[str, ...] = ("xlsx", "xls")
+XLSX_MAGIC = b"PK\x03\x04"
+XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 NAME_TO_CODE: dict[str, str] = {seed.name: seed.code for seed in VARIETY_SEED}
 #: 表头形如「品种：白糖SR     单位：张」/「品种：PTA     单位：张」，按名称前缀匹配
@@ -46,47 +53,57 @@ def _match_code(header: str) -> str | None:
     return None
 
 
-def receipt_url(day: dt.date) -> str:
-    return CXCE_TEMPLATE.format(year=day.year, ymd=day.strftime("%Y%m%d"))
+def receipt_url(day: dt.date, ext: str = "xlsx") -> str:
+    return CXCE_TEMPLATE.format(year=day.year, ymd=day.strftime("%Y%m%d"), ext=ext)
 
 
 def _as_float(value: object) -> float:
     return float(value) if isinstance(value, int | float) else 0.0
 
 
-def parse_receipt_xlsx(data: bytes, day: dt.date) -> list[RawItem]:
-    """解析仓单日报 XLSX，返回每品种一条（value=仓单数量合计）。"""
+def _iter_xlsx_rows(data: bytes) -> Iterator[tuple[object, ...]]:
     workbook = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
     try:
         sheet = workbook.active
         if sheet is None:
-            return []
-        totals: dict[str, list[float]] = {}
-        code: str | None = None
-        receipt_cols: list[int] = []
-        delta_col: int | None = None
-
-        for row in sheet.iter_rows(values_only=True):
-            cells = [str(cell).strip() if cell is not None else "" for cell in row]
-            head = cells[0]
-            if head.startswith("品种："):
-                code = _match_code(head)
-                receipt_cols, delta_col = [], None
-                continue
-            if any(cell.startswith("仓单数量") for cell in cells):
-                receipt_cols = [i for i, cell in enumerate(cells) if cell.startswith("仓单数量")]
-                delta_col = next(
-                    (i for i, cell in enumerate(cells) if cell.startswith("当日增减")),
-                    None,
-                )
-                continue
-            if head in {"总计", "合计"} and code and receipt_cols:
-                acc = totals.setdefault(code, [0.0, 0.0])
-                acc[0] += sum(_as_float(row[i]) for i in receipt_cols if i < len(row))
-                if delta_col is not None and delta_col < len(row):
-                    acc[1] += _as_float(row[delta_col])
+            return
+        yield from sheet.iter_rows(values_only=True)
     finally:
         workbook.close()
+
+
+def _iter_xls_rows(data: bytes) -> Iterator[list[object]]:
+    book = xlrd.open_workbook(file_contents=data)
+    sheet = book.sheet_by_index(0)
+    for index in range(sheet.nrows):
+        yield sheet.row_values(index)
+
+
+def _parse_rows(rows: Iterable[Iterable[object]], day: dt.date) -> list[RawItem]:
+    totals: dict[str, list[float]] = {}
+    code: str | None = None
+    receipt_cols: list[int] = []
+    delta_col: int | None = None
+
+    for row in rows:
+        cells = [str(cell).strip() if cell is not None else "" for cell in row]
+        head = cells[0]
+        if head.startswith("品种："):
+            code = _match_code(head)
+            receipt_cols, delta_col = [], None
+            continue
+        if any(cell.startswith("仓单数量") for cell in cells):
+            receipt_cols = [i for i, cell in enumerate(cells) if cell.startswith("仓单数量")]
+            delta_col = next(
+                (i for i, cell in enumerate(cells) if cell.startswith("当日增减")),
+                None,
+            )
+            continue
+        if head in {"总计", "合计"} and code and receipt_cols:
+            acc = totals.setdefault(code, [0.0, 0.0])
+            acc[0] += sum(_as_float(row[i]) for i in receipt_cols if i < len(row))
+            if delta_col is not None and delta_col < len(row):
+                acc[1] += _as_float(row[delta_col])
 
     return [
         RawItem(
@@ -104,6 +121,35 @@ def parse_receipt_xlsx(data: bytes, day: dt.date) -> list[RawItem]:
     ]
 
 
+def parse_receipt(data: bytes, day: dt.date) -> list[RawItem]:
+    """按文件头自动分派，兼容 2026 起的 xlsx 与更早的 xls。"""
+    if data.startswith(XLSX_MAGIC):
+        return _parse_rows(_iter_xlsx_rows(data), day)
+    if data.startswith(XLS_MAGIC):
+        return _parse_rows(_iter_xls_rows(data), day)
+    return []
+
+
+def parse_receipt_xlsx(data: bytes, day: dt.date) -> list[RawItem]:
+    """解析仓单日报 XLSX，返回每品种一条（value=仓单数量合计）。"""
+    return _parse_rows(_iter_xlsx_rows(data), day)
+
+
+async def fetch_day(http: httpx.AsyncClient, day: dt.date) -> list[RawItem]:
+    """拉取单日仓单，xlsx 缺失时回退 xls；两天都拿不到就返回空。"""
+    for ext in EXTS:
+        response = await http.get(receipt_url(day, ext), headers={"User-Agent": UA})
+        if response.status_code != 200 or len(response.content) < 1024:
+            continue
+        try:
+            items = parse_receipt(response.content, day)
+        except Exception:
+            continue
+        if items:
+            return items
+    return []
+
+
 class CzceReceiptCollector(BaseCollector):
     code: ClassVar[str] = "czce_receipt"
     name: ClassVar[str] = "郑商所仓单日报"
@@ -116,17 +162,11 @@ class CzceReceiptCollector(BaseCollector):
 
     async def fetch(self) -> list[RawItem]:
         today = dt.datetime.now(dt.UTC).astimezone(BEIJING).date()
-        last_error = ""
         for offset in range(MAX_LOOKBACK_DAYS):
             day = today - dt.timedelta(days=offset)
-            response = await self._http.get(receipt_url(day), headers={"User-Agent": UA})
-            if response.status_code != 200 or len(response.content) < 1024:
-                last_error = f"{day} HTTP {response.status_code}"
-                continue
-            items = parse_receipt_xlsx(response.content, day)
+            items = await fetch_day(self._http, day)
             if items:
                 self.day = day
                 return items
-            last_error = f"{day} 解析为空"
-        msg = f"近 {MAX_LOOKBACK_DAYS} 天无仓单文件（{last_error}）"
+        msg = f"近 {MAX_LOOKBACK_DAYS} 天无仓单文件（xlsx/xls 均不可用）"
         raise ValueError(msg)

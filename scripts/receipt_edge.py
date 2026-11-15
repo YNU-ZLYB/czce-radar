@@ -25,7 +25,7 @@ from sqlalchemy import text
 
 from app.core.config import load_settings
 from app.core.db import create_engine, create_session_factory
-from jobs.collectors.czce_receipt import UA, parse_receipt_xlsx, receipt_url
+from jobs.collectors.czce_receipt import fetch_day
 from jobs.ingest.industry import upsert_receipts
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +33,14 @@ OUTPUT_DIR = ROOT / "docs" / "backtest"
 KIND = "warehouse_receipt"
 LOOKBACK = 5
 MIN_SAMPLES = 100
+CONCURRENCY = 8
+
+
+async def _safe_fetch(http: httpx.AsyncClient, day: dt.date) -> list[Any]:
+    try:
+        return await fetch_day(http, day)
+    except Exception:
+        return []
 
 
 def _ranks(values: list[float]) -> list[float]:
@@ -113,26 +121,19 @@ async def _backfill(
     days: list[dt.date],
     have: set[dt.date],
 ) -> int:
+    todo = [d for d in days if d not in have and d.weekday() < 5]
     done = 0
-    for day in days:
-        if day in have or day.weekday() >= 5:
-            continue
-        try:
-            resp = await http.get(receipt_url(day), headers={"User-Agent": UA})
-        except httpx.HTTPError:
-            continue
-        if resp.status_code != 200 or len(resp.content) < 1024:
-            continue
-        try:
-            items = parse_receipt_xlsx(resp.content, day)
-        except Exception:  # noqa: BLE001 - 单个坏文件不应中断回补
-            continue
-        if not items:
-            continue
-        await upsert_receipts(conn, items)
-        done += 1
-        if done % 100 == 0:
-            print(f"  ...已回补 {done} 个交易日（{day}）", flush=True)
+    # 并发下载、串行写库：郑商所单文件 200KB 左右，纯串行回补 4 年要十几分钟
+    for start in range(0, len(todo), CONCURRENCY):
+        chunk = todo[start : start + CONCURRENCY]
+        results = await asyncio.gather(*(_safe_fetch(http, day) for day in chunk))
+        for items in results:
+            if not items:
+                continue
+            await upsert_receipts(conn, items)
+            done += 1
+        if done and done % 100 < CONCURRENCY:
+            print(f"  ...已回补 {done} 个交易日（{chunk[-1]}）", flush=True)
     return done
 
 
@@ -205,8 +206,7 @@ async def run(years: int, backfill: bool, dead_zone: float) -> Path:
             receipts[row.variety_code][row.trade_date] = float(row.value)
 
         results = {
-            code: evaluate(receipts[code], closes[code], dead_zone)
-            for code in sorted(receipts)
+            code: evaluate(receipts[code], closes[code], dead_zone) for code in sorted(receipts)
         }
         return _render(results, since, today, dead_zone)
     finally:
@@ -241,9 +241,7 @@ def _render(
             verdict = "方向相反，需复核"
         else:
             verdict = "无 edge"
-        lines.append(
-            f"| {code} | {n} | {hit_s} | {ic_s} | {r['receipt_max']:.0f} | {verdict} |"
-        )
+        lines.append(f"| {code} | {n} | {hit_s} | {ic_s} | {r['receipt_max']:.0f} | {verdict} |")
         print(f"{code:<6}{n:>8}{hit_s:>9}{ic_s:>9}{r['receipt_max']:>10.0f}  {verdict}")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

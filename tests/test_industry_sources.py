@@ -13,6 +13,7 @@ from sqlalchemy import text
 from czce_schema.symbols import BEIJING
 from jobs.collectors.czce_receipt import (
     CzceReceiptCollector,
+    parse_receipt,
     parse_receipt_xlsx,
     receipt_url,
 )
@@ -82,6 +83,14 @@ def test_parse_receipt_xlsx_sums_tax_free_and_bonded() -> None:
 
 def test_receipt_url_format() -> None:
     assert receipt_url(dt.date(2026, 11, 6)).endswith("/2026/20261106/FutureDataWhsheet.xlsx")
+    assert receipt_url(dt.date(2025, 4, 1), "xls").endswith("/2025/20250401/FutureDataWhsheet.xls")
+
+
+def test_parse_receipt_dispatches_by_magic() -> None:
+    # xlsx 走 openpyxl
+    assert parse_receipt(_xlsx_bytes(), dt.date(2026, 11, 6))[0].payload["code"] == "SR"
+    # 既不是 xlsx 也不是 xls（如官网反爬返回的 HTML）→ 空，不抛异常
+    assert parse_receipt(b"<html>blocked</html>", dt.date(2026, 11, 6)) == []
 
 
 async def test_receipt_collector_falls_back_to_previous_day() -> None:
