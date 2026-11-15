@@ -13,11 +13,13 @@ from jobs.knowledge.importer import import_knowledge
 from jobs.knowledge.models import load_knowledge_dir
 from jobs.predict.engine import predict_variety
 from jobs.predict.rules import (
+    BAND_SCALE_BY_CODE,
     BUCKET_DOWN,
     BUCKET_FLAT,
     BUCKET_STRONG_DOWN,
     BUCKET_STRONG_UP,
     BUCKET_UP,
+    band_scale_for,
     bands,
     classify_bucket,
     direction_of,
@@ -81,6 +83,15 @@ def test_band_scale_only_for_experiments() -> None:
     assert bands(0.6, 0.5) == (0.25, 1.0)
     assert classify_bucket(0.4, 0.6) == BUCKET_FLAT
     assert classify_bucket(0.4, 0.6, 0.5) == BUCKET_UP
+
+
+def test_band_scale_for_only_calibrated_codes() -> None:
+    assert band_scale_for("MA") == 0.5
+    assert band_scale_for("ma") == 0.5
+    # 未校准品种必须保持 1.0，缺输入品种缩带无意义
+    for code in ("AP", "CJ", "SF", "SM", "SA", "SH", "UR"):
+        assert band_scale_for(code) == 1.0
+    assert len(BAND_SCALE_BY_CODE) == 12
 
 
 def test_bucket_boundaries() -> None:

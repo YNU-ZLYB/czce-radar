@@ -59,8 +59,34 @@ def _sigma(vol: float | None) -> float:
     return DEFAULT_VOL if vol is None or vol <= 0 else float(vol)
 
 
+# 震荡带校准表：2026-11-15 四年回测（含 holdout）验证。
+# 这 12 个品种「有信号但被震荡带切掉」，缩到 0.5 后 holdout 覆盖率 18.6%→31.2%、
+# 方向命中 66.0%→63.3%、方向 Brier 0.2449→0.2432。代价是 ECE 0.044→0.076（概率偏自信）。
+# 其余品种保持 1.0：SA/SH/UR 缩带后命中率跌到 50% 附近，AP/CJ/SF/SM 无输入缩带无意义。
+BAND_SCALE_BY_CODE: dict[str, float] = {
+    "CF": 0.5,
+    "CY": 0.5,
+    "MA": 0.5,
+    "OI": 0.5,
+    "PF": 0.5,
+    "PK": 0.5,
+    "PL": 0.5,
+    "PR": 0.5,
+    "PX": 0.5,
+    "RM": 0.5,
+    "SR": 0.5,
+    "TA": 0.5,
+}
+DEFAULT_BAND_SCALE = 1.0
+
+
+def band_scale_for(code: str) -> float:
+    """品种的震荡带缩放系数；不在校准表里的品种一律 1.0。"""
+    return BAND_SCALE_BY_CODE.get(code.upper(), DEFAULT_BAND_SCALE)
+
+
 def bands(vol: float | None, scale: float = 1.0) -> tuple[float, float]:
-    """返回 (震荡带, 强档带)，单位 %。``scale`` 仅供实验/校准使用，默认 1.0 即线上行为。"""
+    """返回 (震荡带, 强档带)，单位 %。``scale`` 供校准使用，默认 1.0。"""
     sigma = _sigma(vol)
     return max(0.5, 0.35 * sigma) * scale, max(2.0, 1.0 * sigma) * scale
 

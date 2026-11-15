@@ -47,7 +47,7 @@ from jobs.predict.metrics import (
     v1_diagnostic,
     walk_forward,
 )
-from jobs.predict.rules import bands, classify_bucket, direction_of, score
+from jobs.predict.rules import band_scale_for, bands, classify_bucket, direction_of, score
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "docs" / "backtest"
@@ -515,7 +515,7 @@ def _render_band_cmp(cmp: dict[str, Any]) -> str:
 async def run(
     since: dt.date,
     until: dt.date,
-    band_scale: float = 1.0,
+    band_scale: float | None = None,
     band_codes: set[str] | None = None,
 ) -> Path:
     settings = load_settings()
@@ -531,11 +531,16 @@ async def run(
             ext_codes = sorted({edge.ext for items in edges.values() for edge in items})
             foreign = await _load_foreign(session, ext_codes, since, until)
 
-        def build(q_mode: str, scale_override: float | None = None) -> list[BacktestRecord]:
+        def build(q_mode: str, mode: str = "cli") -> list[BacktestRecord]:
+            """mode: live=线上校准表；unit=全部 1.0；cli=按 --band-scale/--band-codes。"""
             out: list[BacktestRecord] = []
             for code in sorted(daily):
-                pick = band_scale if scale_override is None else scale_override
-                scale = pick if (band_codes is None or code in band_codes) else 1.0
+                if mode == "live" or (mode == "cli" and band_scale is None):
+                    scale = band_scale_for(code)
+                elif mode == "unit":
+                    scale = 1.0
+                else:
+                    scale = band_scale if (band_codes is None or code in band_codes) else 1.0
                 out.extend(
                     _build_records(
                         code,
@@ -558,8 +563,8 @@ async def run(
 
         # 震荡带实验：同一份数据跑默认阈值与缩放阈值，供上线前对照
         band_cmp: dict[str, Any] | None = None
-        if band_scale != 1.0:
-            base_records = build("pit", 1.0)
+        if band_scale is not None and band_scale != 1.0:
+            base_records = build("pit", "live")
             base_dev, base_hold = split_holdout(base_records, HOLDOUT)
             new_dev, new_hold = split_holdout(all_records, HOLDOUT)
             band_cmp = {
@@ -678,8 +683,8 @@ def main() -> None:
     parser.add_argument(
         "--band-scale",
         type=float,
-        default=1.0,
-        help="震荡带缩放系数（实验用，默认 1.0 即线上行为）",
+        default=None,
+        help="震荡带缩放系数（实验用；不传则用线上校准表）",
     )
     parser.add_argument(
         "--band-codes",

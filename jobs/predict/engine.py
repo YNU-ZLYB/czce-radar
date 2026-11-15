@@ -27,7 +27,7 @@ from jobs.predict.fusion import (
     load_edges,
     load_fusion_models,
 )
-from jobs.predict.rules import RuleOutput, score
+from jobs.predict.rules import RuleOutput, band_scale_for, score
 from jobs.train.dataset import Edge, feature_dict
 from jobs.train.gbm import IsotonicCalibrator, load_artifacts, predict_proba
 
@@ -198,7 +198,7 @@ async def predict_variety(conn: Conn, code: str) -> list[str] | None:
     asof = snap.asof.astimezone(dt.UTC)
     target_date = asof.date()
     missing = await _missing_foreign(conn, code, features)
-    out = score(features, missing_foreign=missing)
+    out = score(features, missing_foreign=missing, band_scale=band_scale_for(code))
     is_event = bool((features.get("event") or {}).get("is_event_day"))
 
     # 1) 永远先写规则基线行（无 active 融合时它就是展示版本，保证产出连续）
