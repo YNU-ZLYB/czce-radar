@@ -38,14 +38,19 @@ OUTPUT_DIR = ROOT / "docs" / "backtest"
 
 
 def _classify_day(row: dict[str, Any]) -> str:
-    """A/B/C/D 四分类；阈值与线上 ``bands()`` 完全同一函数。"""
+    """A/B/C/D/E 分类；阈值与线上 ``bands()`` 完全同一函数。
+
+    与回测 ``direction_accuracy`` 口径对齐：实际横盘（actual_dir==0）的日子
+    既不算命中也不算反向，单独记为 E，不计入命中率分母。漏掉这一条会把
+    「预测偏多但实际横盘」误判成反向，把命中率压低十几个点。
+    """
     if row["n_eff_edges"] == 0:
         return "A"
     if abs(row["exp_change"]) <= row["flat_band"]:
         return "B"
-    if row["direction"] == row["actual_dir"]:
-        return "C"
-    return "D"
+    if row["actual_dir"] == 0:
+        return "E"
+    return "C" if row["direction"] == row["actual_dir"] else "D"
 
 
 def _verdict(stats: dict[str, Any]) -> str:
@@ -63,7 +68,9 @@ def _verdict(stats: dict[str, Any]) -> str:
         return "缺输入"
     if b_ratio >= 0.8:
         return "阈值偏严"
-    if acc is not None and acc < 0.52:
+    if acc is None:
+        return "无有效方向"
+    if acc < 0.52:
         return "不可预测"
     return "正常"
 
@@ -77,11 +84,13 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             "B": 0,
             "C": 0,
             "D": 0,
+            "E": 0,
             "abs_sum": 0.0,
             "band_sum": 0.0,
             "alt_n": 0,
+            "alt_open": 0,
             "alt_hit": 0,
-            "alt_cov": 0,
+            "alt_dir": 0,
         }
     )
     for row in rows:
@@ -95,35 +104,38 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         if row["n_eff_edges"] > 0:
             s["alt_n"] += 1
             if abs(row["exp_change"]) > row["flat_band"] * 0.5:
-                s["alt_cov"] += 1
-                pred = 1 if row["exp_change"] > 0 else -1
-                if pred == row["actual_dir"]:
-                    s["alt_hit"] += 1
+                s["alt_open"] += 1
+                if row["actual_dir"] != 0:  # 与回测同口径，实际横盘不进分母
+                    s["alt_dir"] += 1
+                    pred = 1 if row["exp_change"] > 0 else -1
+                    if pred == row["actual_dir"]:
+                        s["alt_hit"] += 1
     return by_code
 
 
 def _fmt(stats: dict[str, Any]) -> dict[str, Any]:
     n = stats["n"] or 1
-    alt_cov_n = stats.get("alt_cov", 0)
+    opened = stats["C"] + stats["D"] + stats["E"]
+    directional = stats["C"] + stats["D"]
+    alt_dir = stats.get("alt_dir", 0)
     return {
         "n": stats["n"],
         "a_pct": stats["A"] / n * 100,
         "b_pct": (stats["B"] / (n - stats["A"]) * 100) if n > stats["A"] else 0.0,
-        "cov_pct": (stats["C"] + stats["D"]) / n * 100,
-        "acc": (stats["C"] / (stats["C"] + stats["D"]) * 100)
-        if (stats["C"] + stats["D"])
-        else None,
+        "e_pct": stats["E"] / n * 100,
+        "cov_pct": opened / n * 100,
+        "acc": (stats["C"] / directional * 100) if directional else None,
         "abs_exp": stats["abs_sum"] / n * 100,  # 回到 %
         "band": stats["band_sum"] / n,
-        "alt_cov_pct": alt_cov_n / n * 100,
-        "alt_acc": (stats["alt_hit"] / alt_cov_n * 100) if alt_cov_n else None,
+        "alt_cov_pct": stats.get("alt_open", 0) / n * 100,
+        "alt_acc": (stats["alt_hit"] / alt_dir * 100) if alt_dir else None,
         "verdict": _verdict(stats),
     }
 
 
 def _render(rows: list[dict[str, Any]], since: dt.date, until: dt.date) -> str:
     by_code = _aggregate(rows)
-    total = {"n": 0, "A": 0, "B": 0, "C": 0, "D": 0, "abs_sum": 0.0, "band_sum": 0.0}
+    total = {"n": 0, "A": 0, "B": 0, "C": 0, "D": 0, "E": 0, "abs_sum": 0.0, "band_sum": 0.0}
     for stats in by_code.values():
         for key in total:
             total[key] += stats[key]
@@ -133,19 +145,21 @@ def _render(rows: list[dict[str, Any]], since: dt.date, until: dt.date) -> str:
         "",
         "- A 无输入：当天没有可用传导链（q 未校准或外盘缺数据）",
         "- B 被切掉：有输入但 |exp_change| ≤ 震荡带",
-        "- C 命中 / D 反向：越过震荡带、给过方向的日子",
+        "- C 命中 / D 反向：给了方向且实际涨跌非零（与回测 direction_accuracy 同口径）",
+        "- E 实际横盘：给了方向但实际落在震荡带，不计入命中率分母",
         "",
         "## 全样本",
         "",
         f"- 样本 {total['n']}，A {total['A'] / total['n'] * 100:.1f}%，"
         f"B {total['B'] / total['n'] * 100:.1f}%，"
-        f"C {total['C'] / total['n'] * 100:.1f}%，D {total['D'] / total['n'] * 100:.1f}%",
+        f"C {total['C'] / total['n'] * 100:.1f}%，D {total['D'] / total['n'] * 100:.1f}%，"
+        f"E {total['E'] / total['n'] * 100:.1f}%",
         "",
         "## 分品种",
         "",
-        "| 品种 | 样本 | 无输入% | 有输入中被切% | 覆盖率% | 方向命中% | 平均\\|exp\\|% "
-        "| 震荡带% | 半阈值覆盖% | 半阈值命中% | 归因 |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| 品种 | 样本 | 无输入% | 有输入中被切% | 覆盖率% | 实际横盘% | 方向命中% "
+        "| 平均\\|exp\\|% | 震荡带% | 半阈值覆盖% | 半阈值命中% | 归因 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     order = sorted(by_code.items(), key=lambda kv: _fmt(kv[1])["cov_pct"])
     for code, stats in order:
@@ -154,8 +168,8 @@ def _render(rows: list[dict[str, Any]], since: dt.date, until: dt.date) -> str:
         alt_acc = "—" if f["alt_acc"] is None else f"{f['alt_acc']:.1f}"
         lines.append(
             f"| {code} | {f['n']} | {f['a_pct']:.1f} | {f['b_pct']:.1f} | "
-            f"{f['cov_pct']:.1f} | {acc} | {f['abs_exp']:.3f} | {f['band']:.3f} | "
-            f"{f['alt_cov_pct']:.1f} | {alt_acc} | {f['verdict']} |"
+            f"{f['cov_pct']:.1f} | {f['e_pct']:.1f} | {acc} | {f['abs_exp']:.3f} | "
+            f"{f['band']:.3f} | {f['alt_cov_pct']:.1f} | {alt_acc} | {f['verdict']} |"
         )
     buckets: dict[str, list[str]] = defaultdict(list)
     for code, stats in by_code.items():
@@ -164,13 +178,13 @@ def _render(rows: list[dict[str, Any]], since: dt.date, until: dt.date) -> str:
     for verdict, codes in sorted(buckets.items(), key=lambda kv: -len(kv[1])):
         lines.append(f"- **{verdict}**（{len(codes)}）：{' '.join(sorted(codes))}")
 
-    # 是否值得下调阈值：半阈值后覆盖率上升且命中率仍 ≥55%（样本 ≥30）
+    # 是否值得下调阈值：半阈值后覆盖率上升且命中率仍 ≥55%（有效方向样本 ≥30）
     cuttable = [
         code
         for code, stats in by_code.items()
         if _fmt(stats)["alt_acc"] is not None
         and _fmt(stats)["alt_acc"] >= 55.0
-        and stats["alt_cov"] >= 30
+        and stats["alt_dir"] >= 30
     ]
     lines += [
         "",

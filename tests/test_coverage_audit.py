@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
+
 from scripts.coverage_audit import _aggregate, _classify_day, _fmt, _render, _verdict
 
 
@@ -24,32 +26,47 @@ def _row(**kw):
     return base
 
 
-def test_classify_four_buckets() -> None:
+def test_classify_five_buckets() -> None:
     assert _classify_day(_row(n_eff_edges=0)) == "A"
     assert _classify_day(_row(n_eff_edges=1, exp_change=0.4)) == "B"
     assert _classify_day(_row(n_eff_edges=1, exp_change=1.2, direction=1, actual_dir=1)) == "C"
     assert _classify_day(_row(n_eff_edges=1, exp_change=-1.2, direction=-1, actual_dir=1)) == "D"
+    # 给了方向但实际横盘：不算反向，也不进命中率分母（与回测 direction_accuracy 同口径）
+    assert _classify_day(_row(n_eff_edges=1, exp_change=1.2, direction=1, actual_dir=0)) == "E"
+
+
+def test_flat_actual_not_counted_as_miss() -> None:
+    """回归：把「预测偏多但实际横盘」算成反向会人为压低命中率。"""
+    rows = [
+        _row(code="TA", n_eff_edges=1, exp_change=1.2, direction=1, actual_dir=1),
+        _row(code="TA", n_eff_edges=1, exp_change=1.2, direction=1, actual_dir=0),
+        _row(code="TA", n_eff_edges=1, exp_change=1.2, direction=1, actual_dir=0),
+    ]
+    f = _fmt(_aggregate(rows)["TA"])
+    assert f["acc"] == 100.0  # 两个横盘日不进分母
+    assert f["cov_pct"] == 100.0  # 但算「开口」
+    assert f["e_pct"] == pytest.approx(200 / 3)
 
 
 def test_verdict_priority() -> None:
     # 一半以上天数无输入 → 缺输入，优先于其他判断
-    miss = {"n": 100, "A": 60, "B": 30, "C": 10, "D": 0, "abs_sum": 20.0, "band_sum": 50.0}
+    miss = {"n": 100, "A": 60, "B": 30, "C": 10, "D": 0, "E": 0, "abs_sum": 20.0, "band_sum": 50.0}
     assert _verdict(miss) == "缺输入"
 
     # 有输入的日子里 80% 被切 → 阈值偏严
-    cut = {"n": 100, "A": 0, "B": 85, "C": 15, "D": 0, "abs_sum": 20.0, "band_sum": 50.0}
+    cut = {"n": 100, "A": 0, "B": 85, "C": 15, "D": 0, "E": 0, "abs_sum": 20.0, "band_sum": 50.0}
     assert _verdict(cut) == "阈值偏严"
 
     # 给方向但命中率 < 52% → 不可预测
-    bad = {"n": 100, "A": 0, "B": 40, "C": 28, "D": 32, "abs_sum": 60.0, "band_sum": 50.0}
+    bad = {"n": 100, "A": 0, "B": 40, "C": 28, "D": 32, "E": 0, "abs_sum": 60.0, "band_sum": 50.0}
     assert _verdict(bad) == "不可预测"
 
-    good = {"n": 100, "A": 0, "B": 40, "C": 40, "D": 20, "abs_sum": 60.0, "band_sum": 50.0}
+    good = {"n": 100, "A": 0, "B": 40, "C": 40, "D": 20, "E": 0, "abs_sum": 60.0, "band_sum": 50.0}
     assert _verdict(good) == "正常"
 
 
 def test_fmt_zero_division_safe() -> None:
-    stats = {"n": 0, "A": 0, "B": 0, "C": 0, "D": 0, "abs_sum": 0.0, "band_sum": 0.0}
+    stats = {"n": 0, "A": 0, "B": 0, "C": 0, "D": 0, "E": 0, "abs_sum": 0.0, "band_sum": 0.0}
     out = _fmt(stats)
     assert out["acc"] is None
     assert out["verdict"] == "无样本"
