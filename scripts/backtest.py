@@ -8,6 +8,15 @@
 与线上共用 ``jobs.predict.rules.score``（同一条计分路径），只用
 ``daily_bar / foreign_daily / knowledge_edge / seasonality``，绝不使用未来数据：
 目标日 T 的输入为 T-1 及更早的国内日线、T 之前的外盘日线、T 月份的季节性。
+
+传导弹性 ``q`` 的口径（2026-11-15 修正）：
+YAML 里的 ``linkage_q`` 来自 v1 的**全样本**回测，是「用答案调出来的参数」。
+直接拿它回测等于偷看未来，故默认改用 **时点估计**（point-in-time）：
+
+    q_T = 截至 T-1 已兑现的「传导符号命中率」，Laplace 平滑，样本 <60 时置 0（不展示传导行）
+
+同一份报告同时给出 ``static``（旧口径，含泄漏，仅作参照）与 ``pit``（可复现口径）
+两组指标，便于看清泄漏把命中率抬了多少。
 """
 
 from __future__ import annotations
@@ -43,6 +52,7 @@ from jobs.predict.rules import classify_bucket, direction_of, score
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "docs" / "backtest"
 TRAIN, VALIDATION, TEST, HOLDOUT = 500, 20, 20, 60
+MIN_Q_SAMPLES = 60  # 时点 q 的最少已兑现样本数，不足则置 0（不展示传导行）
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,9 +124,7 @@ async def _load_edges(session: AsyncSession) -> dict[str, list[Edge]]:
 async def _load_seasonality(session: AsyncSession) -> dict[tuple[str, int], Season]:
     rows = (
         await session.execute(
-            text(
-                "SELECT variety_code, month, stage, bias, confidence FROM seasonality"
-            )
+            text("SELECT variety_code, month, stage, bias, confidence FROM seasonality")
         )
     ).all()
     return {
@@ -139,7 +147,7 @@ async def _load_daily(
                 " WHERE trade_date >= :a AND trade_date <= :b"
                 " ORDER BY variety_code, trade_date"
             ),
-            {"a": since - dt.timedelta(days=90), "b": until},
+            {"a": since - dt.timedelta(days=400), "b": until},
         )
     ).all()
     grouped: dict[str, list[tuple[dt.date, float]]] = defaultdict(list)
@@ -160,7 +168,7 @@ async def _load_foreign(
             ),
             {
                 "codes": ext_codes,
-                "a": since - dt.timedelta(days=30),
+                "a": since - dt.timedelta(days=400),
                 "b": until,
             },
         )
@@ -179,6 +187,13 @@ async def _load_foreign(
     }
 
 
+def _pit_q(hits: int, n: int) -> float:
+    """截至昨日已兑现的传导符号命中率（Laplace 平滑）；样本不足返回 0（不展示传导行）。"""
+    if n < MIN_Q_SAMPLES:
+        return 0.0
+    return (hits + 1) / (n + 2)
+
+
 def _build_records(
     code: str,
     bars: list[tuple[dt.date, float]],
@@ -187,7 +202,9 @@ def _build_records(
     seasonality: dict[tuple[str, int], Season],
     since: dt.date,
     until: dt.date,
+    q_mode: str = "pit",
 ) -> list[BacktestRecord]:
+    """q_mode: pit=时点命中率（不偷看未来），static=YAML 全样本 q（含泄漏，仅参照）。"""
     if len(bars) < 22:
         return []
     closes = [c for _, c in bars]
@@ -197,16 +214,10 @@ def _build_records(
         returns.append((closes[i] / prev - 1) if prev else None)
 
     records: list[BacktestRecord] = []
+    hits = 0
+    n_seen = 0
     for i in range(21, len(bars)):
         day = bars[i][0]
-        if day < since or day > until:
-            continue
-        window = returns[i - 20 : i]
-        if any(v is None for v in window):
-            continue
-        sigma = _std([float(v) for v in window if v is not None]) * 100
-        if sigma is None:
-            continue
 
         linkage: list[dict[str, Any]] = []
         transmission = 0.0
@@ -220,50 +231,68 @@ def _build_records(
                 continue
             max_abs_foreign = max(max_abs_foreign, abs(chg))
             transmission += chg * edge.prior
+            q = _pit_q(hits, n_seen) if q_mode == "pit" else edge.q
             linkage.append(
                 {
                     "name": edge.name,
                     "ext": edge.ext,
                     "prior": edge.prior,
-                    "q": edge.q,
+                    "q": q,
                     "chg_1d": chg,
                 }
             )
 
-        season = seasonality.get((code, day.month))
-        features = {
-            "price": {"vol_20d": _r(sigma)},
-            "linkage": linkage,
-            "seasonality": {
-                "month": day.month,
-                "bias": season.bias if season else None,
-                "confidence": season.confidence if season else None,
-                "stage": season.stage if season else None,
-            },
-            "news": {"sentiment_lag1": None},
-            "event": {"is_event_day": False},
-        }
-        out = score(features, missing_foreign=missing)
-
         actual_change = (closes[i] / closes[i - 1] - 1) * 100
-        actual_bucket = classify_bucket(actual_change, sigma)
-        records.append(
-            BacktestRecord(
-                variety_code=code,
-                trade_date=day,
-                pred_dir=out.direction,
-                pred_bucket=out.bucket,
-                p_up=out.p_up,
-                p_flat=out.p_flat,
-                p_down=out.p_down,
-                confidence=out.confidence,
-                actual_change=_r(actual_change),
-                actual_dir=direction_of(actual_bucket),
-                actual_bucket=actual_bucket,
-                transmission_sign=1 if transmission > 1e-12 else -1 if transmission < -1e-12 else 0,
-                max_abs_foreign=_r(max_abs_foreign),
+        sigma_window = returns[i - 20 : i]
+        sigma = None
+        if not any(v is None for v in sigma_window):
+            sigma = _std([float(v) for v in sigma_window if v is not None]) * 100
+
+        if since <= day <= until and sigma is not None:
+            season = seasonality.get((code, day.month))
+            features = {
+                "price": {"vol_20d": _r(sigma)},
+                "linkage": linkage,
+                "seasonality": {
+                    "month": day.month,
+                    "bias": season.bias if season else None,
+                    "confidence": season.confidence if season else None,
+                    "stage": season.stage if season else None,
+                },
+                "news": {"sentiment_lag1": None},
+                "event": {"is_event_day": False},
+            }
+            out = score(features, missing_foreign=missing)
+            actual_bucket = classify_bucket(actual_change, sigma)
+            records.append(
+                BacktestRecord(
+                    variety_code=code,
+                    trade_date=day,
+                    pred_dir=out.direction,
+                    pred_bucket=out.bucket,
+                    p_up=out.p_up,
+                    p_flat=out.p_flat,
+                    p_down=out.p_down,
+                    confidence=out.confidence,
+                    actual_change=_r(actual_change),
+                    actual_dir=direction_of(actual_bucket),
+                    actual_bucket=actual_bucket,
+                    transmission_sign=1
+                    if transmission > 1e-12
+                    else -1
+                    if transmission < -1e-12
+                    else 0,
+                    max_abs_foreign=_r(max_abs_foreign),
+                )
             )
-        )
+
+        # 只在 T 收盘后把 (传导, 已兑现涨跌) 计入历史，供 T+1 之后估计 q —— 无未来信息
+        if transmission > 1e-12 or transmission < -1e-12:
+            n_seen += 1
+            if actual_change > 0:
+                hits += int(transmission > 0)
+            elif actual_change < 0:
+                hits += int(transmission < 0)
     return records
 
 
@@ -301,15 +330,14 @@ def _render_report(
     v1: dict[str, Any],
     by_code: dict[str, dict[str, Any]],
     failures: list[BacktestRecord],
+    comparison: dict[str, Any],
 ) -> str:
     v1_dir_ok = v1["hit_rate"] is not None and abs(float(v1["hit_rate"]) - 0.57) <= 0.02
-    v1_strong_ok = v1["strong_hit_rate"] is not None and abs(
-        float(v1["strong_hit_rate"]) - 0.62
-    ) <= 0.05
+    v1_strong_ok = (
+        v1["strong_hit_rate"] is not None and abs(float(v1["strong_hit_rate"]) - 0.62) <= 0.05
+    )
     strong_delta = (
-        (float(v1["strong_hit_rate"]) - 0.62) * 100
-        if v1["strong_hit_rate"] is not None
-        else None
+        (float(v1["strong_hit_rate"]) - 0.62) * 100 if v1["strong_hit_rate"] is not None else None
     )
     lines: list[str] = [
         f"# 回测报告 · {generated.isoformat()}",
@@ -357,7 +385,34 @@ def _render_report(
 
     lines += [
         "",
-        "## 五、可靠性曲线（开发集）",
+        "## 五、泄漏对照：静态 q vs 时点 q",
+        "",
+        "`static` = YAML 里的 linkage_q（来自 v1 全样本回测，含未来信息）；"
+        "`pit` = 截至 T-1 已兑现的传导符号命中率。正文与 JSON 的 `dev/holdout` 均取 `pit`。",
+        "",
+        "| 口径 | 组 | 样本 | 覆盖率 | 方向命中 | Brier(方向) |",
+        "|---|---|---|---|---|---|",
+    ]
+    for mode in ("pit", "static"):
+        for group in ("dev", "holdout"):
+            item = comparison[mode][group]
+            lines.append(
+                f"| {mode} | {group} | {item['n']} | {_pct(item['coverage'])} |"
+                f" {_pct(item['direction_accuracy'])} | {_num(item['brier_direction'], 4)} |"
+            )
+    pit_h, static_h = comparison["pit"]["holdout"], comparison["static"]["holdout"]
+    if pit_h["direction_accuracy"] is not None and static_h["direction_accuracy"] is not None:
+        delta = (static_h["direction_accuracy"] - pit_h["direction_accuracy"]) * 100
+        lines += [
+            "",
+            f"- holdout 上静态 q 比时点 q 高 **{delta:+.1f}pp**，"
+            "这部分就是泄漏带来的虚高，不应计入真实能力。",
+        ]
+    lines += [""]
+
+    lines += [
+        "",
+        "## 六、可靠性曲线（开发集）",
         "",
         "| 置信度区间 | 样本 | 平均置信度 | 实际命中率 |",
         "|---|---|---|---|",
@@ -368,7 +423,7 @@ def _render_report(
             f" {bin_item['avg_confidence']:.3f} | {bin_item['accuracy']:.3f} |"
         )
 
-    lines += ["", "## 六、失败案例（方向做反且实际波动最大的 10 条）", ""]
+    lines += ["", "## 七、失败案例（方向做反且实际波动最大的 10 条）", ""]
     if failures:
         lines += [
             "| 日期 | 品种 | 预测 | 实际 | 实际涨跌 | 置信度 |",
@@ -384,10 +439,14 @@ def _render_report(
 
     lines += [
         "",
-        "## 七、口径说明",
+        "## 八、口径说明",
         "",
         "- `exp_change` = Σ(外盘涨跌 × prior × q) + 季节 bias + 资讯情绪×0.2；"
         "`signal` 按 ×22/Σprior×q 缩放。",
+        f"- `q` 用**时点估计**：截至 T-1 已兑现的传导符号命中率，Laplace 平滑，"
+        f"兑现样本 <{MIN_Q_SAMPLES} 时置 0（该日前不展示传导行）。",
+        "- 季节 bias 来自 `data/knowledge/*.yaml` 的人工先验，不含由历史数据拟合的参数，"
+        "因此不构成泄漏。",
         "- 三分类与幅度分档按品种 σ 自适应：震荡带 max(0.5%, 0.35σ)，强档带 max(2.0%, 1.00σ)。",
         "- 目标日 T 只使用 T-1 及更早数据；外盘只取 trade_date < T 的最近收盘。",
         "- v1 复现部分只检验「外盘传导符号」，与 v1 手册的 57%/62% 结论同口径。",
@@ -410,21 +469,27 @@ async def run(since: dt.date, until: dt.date) -> Path:
             ext_codes = sorted({edge.ext for items in edges.values() for edge in items})
             foreign = await _load_foreign(session, ext_codes, since, until)
 
-        all_records: list[BacktestRecord] = []
-        for code in sorted(daily):
-            all_records.extend(
-                _build_records(
-                    code,
-                    daily[code],
-                    edges.get(code, []),
-                    foreign,
-                    seasonality,
-                    since,
-                    until,
+        def build(q_mode: str) -> list[BacktestRecord]:
+            out: list[BacktestRecord] = []
+            for code in sorted(daily):
+                out.extend(
+                    _build_records(
+                        code,
+                        daily[code],
+                        edges.get(code, []),
+                        foreign,
+                        seasonality,
+                        since,
+                        until,
+                        q_mode,
+                    )
                 )
-            )
+            return out
+
+        all_records = build("pit")
         if not all_records:
             raise SystemExit("回测无样本：请先回补 daily_bar 与 foreign_daily")
+        static_records = build("static")
 
         dev_records, holdout_records = split_holdout(all_records, HOLDOUT)
         dev = summarize(dev_records)
@@ -433,12 +498,17 @@ async def run(since: dt.date, until: dt.date) -> Path:
         v1 = v1_diagnostic(all_records)
         by_code = per_variety(all_records)
 
+        s_dev_records, s_holdout_records = split_holdout(static_records, HOLDOUT)
+        comparison = {
+            "pit": {"dev": dev, "holdout": holdout},
+            "static": {
+                "dev": summarize(s_dev_records),
+                "holdout": summarize(s_holdout_records),
+            },
+        }
+
         failures = sorted(
-            (
-                r
-                for r in dev_records
-                if r.pred_dir != 0 and r.pred_dir != r.actual_dir
-            ),
+            (r for r in dev_records if r.pred_dir != 0 and r.pred_dir != r.actual_dir),
             key=lambda r: abs(r.actual_change),
             reverse=True,
         )[:10]
@@ -456,6 +526,7 @@ async def run(since: dt.date, until: dt.date) -> Path:
             v1=v1,
             by_code=by_code,
             failures=failures,
+            comparison=comparison,
         )
 
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -473,6 +544,7 @@ async def run(since: dt.date, until: dt.date) -> Path:
             },
             "dev": dev,
             "holdout": holdout,
+            "leakage_comparison": comparison,
             "walk_forward": wf,
             "v1": v1,
             "per_variety": by_code,
@@ -516,9 +588,9 @@ async def run(since: dt.date, until: dt.date) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Layer A 规则基线回测")
     today = dt.date.today()
-    parser.add_argument("--since", type=dt.date.fromisoformat, default=today.replace(
-        year=today.year - 4
-    ))
+    parser.add_argument(
+        "--since", type=dt.date.fromisoformat, default=today.replace(year=today.year - 4)
+    )
     parser.add_argument("--until", type=dt.date.fromisoformat, default=today)
     args = parser.parse_args()
     asyncio.run(run(args.since, args.until))

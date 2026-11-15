@@ -107,9 +107,7 @@ def test_reliability_curve_and_ece() -> None:
     assert curve[0]["n"] == 3
     assert curve[0]["avg_confidence"] == pytest.approx(0.8)
     assert curve[0]["accuracy"] == pytest.approx(2 / 3, abs=1e-4)
-    assert expected_calibration_error(records) == pytest.approx(
-        abs(2 / 3 - 0.8), abs=1e-4
-    )
+    assert expected_calibration_error(records) == pytest.approx(abs(2 / 3 - 0.8), abs=1e-4)
 
 
 def test_v1_diagnostic_overall_and_strong_subset() -> None:
@@ -158,3 +156,71 @@ def test_walk_forward_folds_use_only_test_windows() -> None:
     assert result["folds"] == 3
     assert result["aggregate"]["n"] == 6
     assert result["aggregate"]["direction_accuracy"] == pytest.approx(1.0)
+
+
+# --- 时点 q（防泄漏）-------------------------------------------------------
+
+from scripts.backtest import (  # noqa: E402
+    MIN_Q_SAMPLES,
+    Edge,
+    Season,
+    Series,
+    _build_records,
+    _pit_q,
+)
+
+
+def _synthetic(days: int = 300) -> tuple[list[tuple[dt.date, float]], dict[str, Series]]:
+    """构造 300 个交易日的价格与外盘：外盘次日方向上 65% 命中，噪声稳定。"""
+    base = dt.date(2019, 1, 1)
+    bars: list[tuple[dt.date, float]] = []
+    dates: list[dt.date] = []
+    closes: list[float] = []
+    ext_changes: list[float] = []
+    price = 100.0
+    for i in range(days):
+        d = base + dt.timedelta(days=i)
+        alt = -0.6 if i % 2 else 0.6  # 外盘隔日交替，模拟“预测次日”
+        ext_changes.append(alt)
+        price *= 1 + (0.01 if (alt > 0) == (i % 10 < 6) else -0.004)
+        dates.append(d)
+        closes.append(price)
+        bars.append((d, price))
+    return bars, {"OIL": Series(dates=dates, values=ext_changes)}
+
+
+def test_pit_q_requires_min_samples_and_is_smoothed() -> None:
+    assert _pit_q(0, MIN_Q_SAMPLES - 1) == 0.0
+    assert _pit_q(40, 60) == pytest.approx(41 / 62)
+
+
+def test_pit_q_never_peeks_future_bars() -> None:
+    """把未来数据砍掉，历史日期的预测必须一字不变 —— 时点 q 的核心不变量。"""
+    bars, foreign = _synthetic(300)
+    edges = [Edge(name="布伦特原油", ext="OIL", prior=0.5, q=0.9)]
+    season = {("MA", m): Season(bias=1.0, confidence=0.4, stage="冬") for m in range(1, 13)}
+    since = bars[150][0]
+    until = bars[-1][0]
+
+    full = _build_records("MA", bars, edges, foreign, season, since, until, "pit")
+    cut = _build_records("MA", bars[:220], edges, foreign, season, since, until, "pit")
+
+    common = [r for r in full if r.trade_date <= bars[219][0]]
+    assert len(common) == len(cut)
+    assert [(r.trade_date, r.pred_dir, r.p_up) for r in common] == [
+        (r.trade_date, r.pred_dir, r.p_up) for r in cut
+    ]
+
+
+def test_static_q_uses_yaml_value_while_pit_starts_neutral() -> None:
+    bars, foreign = _synthetic(300)
+    edges = [Edge(name="布伦特原油", ext="OIL", prior=0.5, q=0.9)]
+    season = {("MA", m): Season(bias=0.0, confidence=0.0, stage="") for m in range(1, 13)}
+    since, until = bars[22][0], bars[-1][0]
+
+    pit = _build_records("MA", bars, edges, foreign, season, since, until, "pit")
+    static = _build_records("MA", bars, edges, foreign, season, since, until, "static")
+    # 时点口径在头 60 个已兑现样本前 q=0，静态口径一直用 0.9，两者必然不同
+    assert any(a.pred_dir != b.pred_dir for a, b in zip(pit, static, strict=False)) or any(
+        a.p_up != b.p_up for a, b in zip(pit, static, strict=False)
+    )
