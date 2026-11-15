@@ -75,6 +75,14 @@ def test_bands_are_sigma_adaptive() -> None:
     assert fallback[1] == pytest.approx(2.0)
 
 
+def test_band_scale_only_for_experiments() -> None:
+    # 默认 1.0 必须与线上完全一致；缩放后震荡带同步收窄
+    assert bands(0.6) == bands(0.6, 1.0)
+    assert bands(0.6, 0.5) == (0.25, 1.0)
+    assert classify_bucket(0.4, 0.6) == BUCKET_FLAT
+    assert classify_bucket(0.4, 0.6, 0.5) == BUCKET_UP
+
+
 def test_bucket_boundaries() -> None:
     assert classify_bucket(2.01, 0.6) == BUCKET_STRONG_UP
     assert classify_bucket(1.0, 0.6) == BUCKET_UP

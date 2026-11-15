@@ -204,11 +204,13 @@ def _build_records(
     until: dt.date,
     q_mode: str = "pit",
     detail: list[dict[str, Any]] | None = None,
+    band_scale: float = 1.0,
 ) -> list[BacktestRecord]:
     """q_mode: pit=时点命中率（不偷看未来），static=YAML 全样本 q（含泄漏，仅参照）。
 
     ``detail`` 非空时，逐日追加一行中间量（exp_change / 阈值 / 有效权重），
     供 ``scripts.coverage_audit`` 做覆盖率归因，不影响返回的 records。
+    ``band_scale`` 缩放震荡带，仅用于阈值实验，默认 1.0。
     """
     if len(bars) < 22:
         return []
@@ -267,7 +269,7 @@ def _build_records(
                 "news": {"sentiment_lag1": None},
                 "event": {"is_event_day": False},
             }
-            out = score(features, missing_foreign=missing)
+            out = score(features, missing_foreign=missing, band_scale=band_scale)
             actual_bucket = classify_bucket(actual_change, sigma)
             if detail is not None:
                 eff_weight = sum(float(x["prior"]) * float(x["q"]) for x in linkage if x["q"] > 0)
@@ -276,7 +278,7 @@ def _build_records(
                         "code": code,
                         "day": day,
                         "exp_change": out.exp_change,
-                        "flat_band": bands(sigma)[0],
+                        "flat_band": bands(sigma, band_scale)[0],
                         "eff_weight": eff_weight,
                         "n_edges": len(linkage),
                         "n_eff_edges": sum(1 for x in linkage if x["q"] > 0),
@@ -476,7 +478,43 @@ def _render_report(
     return "\n".join(lines)
 
 
-async def run(since: dt.date, until: dt.date) -> Path:
+def _render_band_cmp(cmp: dict[str, Any]) -> str:
+    """震荡带缩放实验的对照表（默认阈值 vs 缩放阈值）。"""
+    codes = cmp["codes"]
+    scope = "全部品种" if codes is None else f"{len(codes)} 个品种：{' '.join(codes)}"
+
+    def row(label: str, base: dict[str, Any], new: dict[str, Any]) -> str:
+        acc_b = "—" if base["direction_accuracy"] is None else f"{base['direction_accuracy']:.1f}"
+        acc_n = "—" if new["direction_accuracy"] is None else f"{new['direction_accuracy']:.1f}"
+        return (
+            f"| {label} | {base['coverage'] * 100:.1f} | {new['coverage'] * 100:.1f} | "
+            f"{acc_b} | {acc_n} | {base['brier']:.4f} | {new['brier']:.4f} |"
+        )
+
+    return "\n".join(
+        [
+            "",
+            "## 震荡带缩放实验",
+            "",
+            f"- 缩放系数 {cmp['scale']}（震荡带 ×{cmp['scale']}），范围：{scope}",
+            "",
+            "| 区间 | 覆盖率% 原 | 覆盖率% 新 | 方向命中% 原 | 方向命中% 新 | Brier 原 | Brier 新 |",
+            "|---|---|---|---|---|---|---|",
+            row("开发集", cmp["base_dev"], cmp["new_dev"]),
+            row("holdout", cmp["base_holdout"], cmp["new_holdout"]),
+            "",
+            "判读：覆盖率上升且 holdout 命中率不塌、Brier 不升，才值得上线。",
+            "",
+        ]
+    )
+
+
+async def run(
+    since: dt.date,
+    until: dt.date,
+    band_scale: float = 1.0,
+    band_codes: set[str] | None = None,
+) -> Path:
     settings = load_settings()
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
@@ -490,9 +528,11 @@ async def run(since: dt.date, until: dt.date) -> Path:
             ext_codes = sorted({edge.ext for items in edges.values() for edge in items})
             foreign = await _load_foreign(session, ext_codes, since, until)
 
-        def build(q_mode: str) -> list[BacktestRecord]:
+        def build(q_mode: str, scale_override: float | None = None) -> list[BacktestRecord]:
             out: list[BacktestRecord] = []
             for code in sorted(daily):
+                pick = band_scale if scale_override is None else scale_override
+                scale = pick if (band_codes is None or code in band_codes) else 1.0
                 out.extend(
                     _build_records(
                         code,
@@ -503,6 +543,7 @@ async def run(since: dt.date, until: dt.date) -> Path:
                         since,
                         until,
                         q_mode,
+                        band_scale=scale,
                     )
                 )
             return out
@@ -511,6 +552,21 @@ async def run(since: dt.date, until: dt.date) -> Path:
         if not all_records:
             raise SystemExit("回测无样本：请先回补 daily_bar 与 foreign_daily")
         static_records = build("static")
+
+        # 震荡带实验：同一份数据跑默认阈值与缩放阈值，供上线前对照
+        band_cmp: dict[str, Any] | None = None
+        if band_scale != 1.0:
+            base_records = build("pit", 1.0)
+            base_dev, base_hold = split_holdout(base_records, HOLDOUT)
+            new_dev, new_hold = split_holdout(all_records, HOLDOUT)
+            band_cmp = {
+                "scale": band_scale,
+                "codes": sorted(band_codes) if band_codes else None,
+                "base_dev": summarize(base_dev),
+                "new_dev": summarize(new_dev),
+                "base_holdout": summarize(base_hold),
+                "new_holdout": summarize(new_hold),
+            }
 
         dev_records, holdout_records = split_holdout(all_records, HOLDOUT)
         dev = summarize(dev_records)
@@ -552,7 +608,10 @@ async def run(since: dt.date, until: dt.date) -> Path:
 
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         md_path = OUTPUT_DIR / f"{generated:%Y%m%d}.md"
-        md_path.write_text(report, encoding="utf-8")
+        section = "" if band_cmp is None else _render_band_cmp(band_cmp)
+        md_path.write_text(report + section, encoding="utf-8")
+        if section:
+            print(section)
         payload = {
             "generated_at": dt.datetime.now(dt.UTC).isoformat(),
             "model_version": model_version,
@@ -613,8 +672,20 @@ def main() -> None:
         "--since", type=dt.date.fromisoformat, default=today.replace(year=today.year - 4)
     )
     parser.add_argument("--until", type=dt.date.fromisoformat, default=today)
+    parser.add_argument(
+        "--band-scale",
+        type=float,
+        default=1.0,
+        help="震荡带缩放系数（实验用，默认 1.0 即线上行为）",
+    )
+    parser.add_argument(
+        "--band-codes",
+        default="",
+        help="只对这些品种缩放，逗号分隔；留空表示全部",
+    )
     args = parser.parse_args()
-    asyncio.run(run(args.since, args.until))
+    codes = {c.strip().upper() for c in args.band_codes.split(",") if c.strip()} or None
+    asyncio.run(run(args.since, args.until, args.band_scale, codes))
 
 
 if __name__ == "__main__":

@@ -59,14 +59,14 @@ def _sigma(vol: float | None) -> float:
     return DEFAULT_VOL if vol is None or vol <= 0 else float(vol)
 
 
-def bands(vol: float | None) -> tuple[float, float]:
-    """返回 (震荡带, 强档带)，单位 %。"""
+def bands(vol: float | None, scale: float = 1.0) -> tuple[float, float]:
+    """返回 (震荡带, 强档带)，单位 %。``scale`` 仅供实验/校准使用，默认 1.0 即线上行为。"""
     sigma = _sigma(vol)
-    return max(0.5, 0.35 * sigma), max(2.0, 1.0 * sigma)
+    return max(0.5, 0.35 * sigma) * scale, max(2.0, 1.0 * sigma) * scale
 
 
-def classify_bucket(exp_change: float, vol: float | None) -> str:
-    flat, strong = bands(vol)
+def classify_bucket(exp_change: float, vol: float | None, scale: float = 1.0) -> str:
+    flat, strong = bands(vol, scale)
     if exp_change > strong:
         return BUCKET_STRONG_UP
     if exp_change > flat:
@@ -86,10 +86,12 @@ def _norm_cdf(z: float) -> float:
     return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
 
 
-def probabilities(exp_change: float, vol: float | None) -> tuple[float, float, float]:
+def probabilities(
+    exp_change: float, vol: float | None, scale: float = 1.0
+) -> tuple[float, float, float]:
     """Normal(exp_change, σ) 对三档积分；返回 (p_up, p_flat, p_down)，和恒为 1。"""
     sigma = _sigma(vol)
-    flat, _ = bands(vol)
+    flat, _ = bands(vol, scale)
     p_down = _norm_cdf((-flat - exp_change) / sigma)
     p_up = 1.0 - _norm_cdf((flat - exp_change) / sigma)
     p_down = min(max(p_down, 0.0), 1.0)
@@ -186,18 +188,19 @@ def score(
     *,
     missing_foreign: int = 0,
     is_event_day: bool | None = None,
+    band_scale: float = 1.0,
 ) -> RuleOutput:
     """对一份 FeatureSnapshot.features 打分（确定性，无副作用）。"""
     rows, raw, effective = _contributor_rows(features)
     vol = (features.get("price") or {}).get("vol_20d")
 
     exp_change = round(raw, 4)
-    bucket = classify_bucket(exp_change, vol)
+    bucket = classify_bucket(exp_change, vol, band_scale)
     direction = direction_of(bucket)
     signal = round(raw * SIGNAL_SCALE / max(MIN_EFFECTIVE_WEIGHT, effective))
     signal = min(max(signal, -100), 100)
 
-    p_up, p_flat, p_down = probabilities(exp_change, vol)
+    p_up, p_flat, p_down = probabilities(exp_change, vol, band_scale)
     confidence = max(p_up, p_flat, p_down)
     event_flag = (
         is_event_day
