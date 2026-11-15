@@ -171,9 +171,11 @@ async def run(years: int, backfill: bool, dead_zone: float) -> Path:
             }
             if backfill:
                 print(f"回补仓单：{len(days) - len(have)} 个交易日待补", flush=True)
+                # 前面的 SELECT 已隐式开启事务，这里直接复用连接，结束时统一 commit
+                conn = await session.connection()
                 async with httpx.AsyncClient(timeout=30) as http:
-                    async with session.begin():
-                        done = await _backfill(http, await session.connection(), days, have)
+                    done = await _backfill(http, conn, days, have)
+                await session.commit()
                 print(f"回补完成：写入 {done} 个交易日", flush=True)
 
             closes_raw = (
