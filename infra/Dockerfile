@@ -17,6 +17,9 @@ COPY apps/api ./apps/api
 COPY jobs ./jobs
 COPY packages ./packages
 COPY migrations ./migrations
+# 运维脚本（回补/回测/训练）与知识库 YAML：容器内需要 `python -m scripts.*` 可执行
+COPY scripts ./scripts
+COPY data ./data
 COPY infra/entrypoint.sh /usr/local/bin/czce-entrypoint
 
 ARG PIP_INDEX_URL=""
