@@ -79,7 +79,7 @@ def evaluate(
     days = sorted(receipts)
     xs: list[float] = []
     ys: list[float] = []
-    hit = total = 0
+    hit = total = flat = 0
     for day in days:
         later = [d for d in closes if d > day]
         if not later:
@@ -97,6 +97,10 @@ def evaluate(
         ret = (close_nxt / close_now - 1) * 100
         if abs(ret) < dead_zone:
             continue
+        # 仓单未变化 = 无信号，既不算命中也不算失误
+        if abs(growth) < 1e-12:
+            flat += 1
+            continue
         xs.append(-growth)  # 仓单增加 → 负向信号
         ys.append(ret)
         total += 1
@@ -107,6 +111,7 @@ def evaluate(
         "hit": (hit / total) if total else None,
         "ic": _spearman(xs, ys),
         "receipt_max": max(receipts.values()) if receipts else 0.0,
+        "flat": flat,
     }
 
 
@@ -223,26 +228,31 @@ def _render(
         f"- 因子：仓单 {LOOKBACK} 日变化率；假设「仓单增 → 次日跌」",
         f"- 方向命中排除 |次日涨跌| < {dead_zone}% 的样本；IC 为秩相关",
         "",
-        "| 品种 | 有效样本 | 方向命中% | IC | 仓单峰值 | 判定 |",
-        "|---|---|---|---|---|---|",
+        "| 品种 | 有效样本 | 持平天数 | 方向命中% | IC | 仓单峰值 | 判定 |",
+        "|---|---|---|---|---|---|---|",
     ]
-    print(f"{'品种':<6}{'样本':>8}{'命中%':>9}{'IC':>9}{'峰值':>10}  判定")
+    print(f"{'品种':<6}{'样本':>8}{'持平':>7}{'命中%':>9}{'IC':>9}{'峰值':>10}  判定")
     for code, r in sorted(results.items(), key=lambda kv: -(kv[1]["ic"] or -9)):
         n, hit, ic = r["n"], r["hit"], r["ic"]
+        flat = r["flat"]
         hit_s = "—" if hit is None else f"{hit * 100:.1f}"
         ic_s = "—" if ic is None else f"{ic:+.3f}"
         if n < MIN_SAMPLES:
             verdict = "样本不足"
         elif r["receipt_max"] <= 0:
             verdict = "仓单恒为 0，无信息"
+        elif r["receipt_max"] < 100:
+            verdict = "仓单量级过小，不可用"
         elif ic is not None and ic >= 0.03 and hit is not None and hit >= 0.53:
             verdict = "有弱 edge"
         elif ic is not None and ic <= -0.03:
             verdict = "方向相反，需复核"
         else:
             verdict = "无 edge"
-        lines.append(f"| {code} | {n} | {hit_s} | {ic_s} | {r['receipt_max']:.0f} | {verdict} |")
-        print(f"{code:<6}{n:>8}{hit_s:>9}{ic_s:>9}{r['receipt_max']:>10.0f}  {verdict}")
+        lines.append(
+            f"| {code} | {n} | {flat} | {hit_s} | {ic_s} | {r['receipt_max']:.0f} | {verdict} |"
+        )
+        print(f"{code:<6}{n:>8}{flat:>7}{hit_s:>9}{ic_s:>9}{r['receipt_max']:>10.0f}  {verdict}")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUTPUT_DIR / f"receipt_edge_{until:%Y%m%d}.md"

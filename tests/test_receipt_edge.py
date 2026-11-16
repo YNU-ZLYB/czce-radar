@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
-
 from scripts.receipt_edge import _spearman, evaluate
 
 
@@ -39,6 +38,17 @@ def test_evaluate_skips_zero_base_receipt() -> None:
     closes = {d: 100.0 * (1.01**i) for i, d in enumerate(days)}
     res = evaluate(receipts, closes)
     assert res["n"] == 0
+
+
+def test_evaluate_excludes_flat_receipt_from_hit_rate() -> None:
+    # 仓单一直不变 = 无信号，不能算成「猜错」，否则命中率会被压到 0
+    days = [_d(i) for i in range(14)]
+    receipts = {d: 100.0 for d in days}
+    closes = {d: 200.0 - 3.0 * i for i, d in enumerate(days)}
+    res = evaluate(receipts, closes)
+    assert res["n"] == 0
+    assert res["hit"] is None
+    assert res["flat"] >= 8
 
 
 def test_spearman_perfect_monotonic() -> None:
