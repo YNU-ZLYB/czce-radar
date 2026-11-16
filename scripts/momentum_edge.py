@@ -33,12 +33,22 @@ MIN_SAMPLES = 200
 MIN_IC = 0.05
 
 
-def evaluate_momentum(closes: list[tuple[dt.date, float]], window: int) -> dict[str, Any]:
-    """动量 k 日变化 vs 次日收益。返回全样本/前后半段 IC 与命中率。"""
+def evaluate_momentum(
+    closes: list[tuple[dt.date, float]],
+    window: int,
+    exclude: set[dt.date] | None = None,
+) -> dict[str, Any]:
+    """动量 k 日变化 vs 次日收益。返回全样本/前后半段 IC 与命中率。
+
+    exclude：命中该日期集合的样本日直接跳过（用于剔除换月等污染日）。
+    """
     xs: list[float] = []
     ys: list[float] = []
     hit = total = 0
+    skip = exclude or set()
     for i in range(window, len(closes) - 1):
+        if closes[i][0] in skip:
+            continue
         base = closes[i - window][1]
         cur = closes[i][1]
         nxt = closes[i + 1][1]
