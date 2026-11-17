@@ -6,15 +6,23 @@
     python -m scripts.pnl_backtest --codes TA,MA  # 只看部分品种
     python -m scripts.pnl_backtest --years 2
 
-口径
-----
-- 信号：生产规则 ``score()``（PIT q），与命中率回测同源、同数据。
-- 交易：信号日收盘建仓，下一交易日收盘平仓，方向 = 多/空，不加杠杆、不止损。
-- 单笔毛收益：``dir * (close[t+1]/close[t] - 1)``（%），成本按双边合计 bps 扣减。
-- 组合：每天资金等权分配到当天所有信号，无信号则空仓（当日收益 0），逐日复利。
+两种口径（核心区别在入场价，务必只看 oc 判断能否赚钱）
+----------------------------------------------------
+- ``oc``（可成交）：目标日 09:00 开盘建仓、当日收盘平仓。与生产一致——预测在
+  08:25 生成，用的是目标日之前的外盘与行情，开盘后才可能成交。
+- ``cc``（不可成交，仅对照）：前一交易日收盘建仓、当日收盘平仓。前收 15:00 时
+  外盘当日数据尚未产生，信号还不存在，因此该口径会白赚夜盘与隔夜跳空，
+  收益率必然虚高，只用于量化"隔夜贡献了多少幻觉"。
 
-诚实声明（必须随结果一起读）
---------------------------
+其他约定
+--------
+- 信号：生产规则 ``score()``（PIT q），与命中率回测同源、同数据。
+- 单笔毛收益：方向 × 区间涨跌幅（%），成本按双边合计 bps 扣减。
+- 组合：每天资金等权分配到当天所有信号，无信号则空仓（当日收益 0），逐日复利。
+- 基准：同一批交易"全部做多"与"随机方向"（100 次随机平均）。
+
+诚实声明
+--------
 1. 行情是未复权主力连续价，换月跳空被当成真实盈亏，可能虚增也可能虚减。
 2. 未处理涨跌停无法成交、夜盘流动性、保证金占用与强平。
 3. 成本是统一假设值而非逐品种真实费率，因此输出 0/4/8/12bps 敏感性。
@@ -30,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from sqlalchemy import text
 
 from app.core.config import load_settings
 from app.core.db import create_engine, create_session_factory
@@ -54,10 +63,11 @@ class Trade:
     day: dt.date
     direction: int
     confidence: float
-    gross: float  # %，未扣成本
+    chg_oc: float  # 当日 开盘->收盘 涨跌幅 %
+    chg_cc: float  # 前收->当日收盘 涨跌幅 %
 
 
-def trades_from_records(records, gate: float | None) -> list[Trade]:
+def trades_from_records(records, gate: float | None, oc: dict) -> list[Trade]:
     out: list[Trade] = []
     for r in records:
         d = int(r.pred_dir)
@@ -65,27 +75,42 @@ def trades_from_records(records, gate: float | None) -> list[Trade]:
             continue
         if gate is not None and float(r.confidence) < gate:
             continue
+        chg_oc = oc.get((r.variety_code, r.trade_date))
+        if chg_oc is None:
+            continue
         out.append(
             Trade(
                 code=r.variety_code,
                 day=r.trade_date,
                 direction=d,
                 confidence=float(r.confidence),
-                gross=d * float(r.actual_change),
+                chg_oc=float(chg_oc),
+                chg_cc=float(r.actual_change),
             )
         )
     return out
 
 
-def evaluate(trades: list[Trade], days: list[dt.date], cost_bps: float) -> dict:
-    """等权日频组合指标 + 逐笔统计。复杂度 O(交易数 + 天数)。"""
+def evaluate(
+    trades: list[Trade],
+    days: list[dt.date],
+    cost_bps: float,
+    kind: str = "oc",
+    mode: str = "signal",
+    seed: int = 0,
+) -> dict:
+    """等权日频组合指标 + 逐笔统计。kind: oc/cc；mode: signal/long/random。"""
     cost = cost_bps / 100.0  # bps -> %
     pos = {d: i for i, d in enumerate(days)}
     sums = np.zeros(len(days))
     counts = np.zeros(len(days), dtype=int)
     net = np.empty(len(trades))
+    rng = np.random.default_rng(seed)
+    random_dirs = rng.choice(np.array([-1, 1]), size=len(trades)) if mode == "random" else None
     for i, t in enumerate(trades):
-        nv = t.gross - cost
+        raw = t.chg_oc if kind == "oc" else t.chg_cc
+        d = t.direction if mode == "signal" else (1 if mode == "long" else int(random_dirs[i]))
+        nv = d * raw - cost
         net[i] = nv
         j = pos.get(t.day)
         if j is not None:
@@ -113,8 +138,6 @@ def evaluate(trades: list[Trade], days: list[dt.date], cost_bps: float) -> dict:
         "max_drawdown": mdd,
         "active_days": int((counts > 0).sum()),
         "avg_positions": float(counts[counts > 0].mean()) if (counts > 0).any() else 0.0,
-        "daily": daily,
-        "equity": eq,
         "net": net,
     }
 
@@ -123,7 +146,7 @@ def yearly(trades: list[Trade], cost_bps: float) -> dict[int, dict]:
     cost = cost_bps / 100.0
     out: dict[int, dict] = {}
     for y in sorted({t.day.year for t in trades}):
-        net = np.array([t.gross - cost for t in trades if t.day.year == y])
+        net = np.array([t.direction * t.chg_oc - cost for t in trades if t.day.year == y])
         out[y] = {
             "trades": len(net),
             "win_rate": float((net > 0).mean()),
@@ -137,7 +160,7 @@ def by_code(trades: list[Trade], cost_bps: float) -> list[tuple[str, int, float,
     cost = cost_bps / 100.0
     rows = []
     for code in sorted({t.code for t in trades}):
-        net = np.array([t.gross - cost for t in trades if t.code == code])
+        net = np.array([t.direction * t.chg_oc - cost for t in trades if t.code == code])
         rows.append((code, len(net), float((net > 0).mean()), float(net.mean() * 100)))
     rows.sort(key=lambda r: r[3])
     return rows
@@ -151,37 +174,69 @@ def _row(name: str, m: dict) -> str:
     )
 
 
+HEAD = "| 配置 | 交易数 | 净胜率 | 每笔净收益bp | 盈亏比 | 累计收益 | 年化 | 夏普 | 最大回撤 | 平均持仓数 |"
+SEP = "|---|---|---|---|---|---|---|---|---|---|"
+
+
 def run_report(configs: dict[str, list[Trade]], days: list[dt.date], since: dt.date, until: dt.date) -> str:
     lines = [
         f"# 收益回测 · {dt.date.today():%Y-%m-%d}",
         f"- 区间 {since} ~ {until}，{len(days)} 个交易日",
-        "- 信号日收盘建仓、次日收盘平仓；每日等权分配到有信号的品种，无信号则空仓",
+        "- oc = 当日开盘建仓、当日收盘平仓（可成交，与生产 08:25 出信号一致）",
+        "- cc = 前收建仓、当日收盘平仓（信号当时尚不存在，**不可成交**，仅作对照）",
         "- 未复权连续价（换月跳空计入盈亏）、未处理涨跌停与保证金；成本为统一假设",
         "",
-        "## 成本 8bps（双边合计）下的组合表现",
-        "| 配置 | 交易数 | 净胜率 | 每笔净收益bp | 盈亏比 | 累计收益 | 年化 | 夏普 | 最大回撤 | 平均持仓数 |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "## 可成交口径 oc · 成本 8bps",
+        HEAD,
+        SEP,
     ]
     for name, trades in configs.items():
-        lines.append(_row(name, evaluate(trades, days, 8.0)))
+        lines.append(_row(name, evaluate(trades, days, 8.0, "oc")))
+
+    lines += ["", "## 对照口径 cc（含隔夜，无法成交，仅量化幻觉部分）", HEAD, SEP]
+    for name, trades in configs.items():
+        lines.append(_row(name, evaluate(trades, days, 8.0, "cc")))
 
     lines += [
         "",
-        "## 成本敏感性（年化收益 / 夏普）",
+        "## oc 成本敏感性（年化收益 / 夏普）",
         "| 配置 | 0bps | 4bps | 8bps | 12bps |",
         "|---|---|---|---|---|",
     ]
     for name, trades in configs.items():
         cells = []
         for c in COST_BPS:
-            m = evaluate(trades, days, c)
+            m = evaluate(trades, days, c, "oc")
             cells.append(f"{m['annual_return']:+.1%} / {m['sharpe']:.2f}")
         lines.append(f"| {name} | " + " | ".join(cells) + " |")
+
+    lines += [
+        "",
+        "## oc 基准对照（8bps）：同一批交易换个方向规则",
+        "| 配置 | 方向规则 | 净胜率 | 每笔净收益bp | 年化 | 夏普 |",
+        "|---|---|---|---|---|---|",
+    ]
+    for name, trades in configs.items():
+        if not trades:
+            continue
+        for mode, label in (("signal", "模型方向"), ("long", "全部做多")):
+            m = evaluate(trades, days, 8.0, "oc", mode)
+            lines.append(
+                f"| {name} | {label} | {m['win_rate']:.1%} | {m['avg_net_bp']:+.1f} | "
+                f"{m['annual_return']:+.1%} | {m['sharpe']:.2f} |"
+            )
+        rnd = [evaluate(trades, days, 8.0, "oc", "random", seed=s) for s in range(100)]
+        lines.append(
+            f"| {name} | 随机方向(100次均值) | {np.mean([m['win_rate'] for m in rnd]):.1%} | "
+            f"{np.mean([m['avg_net_bp'] for m in rnd]):+.1f} | "
+            f"{np.mean([m['annual_return'] for m in rnd]):+.1%} | "
+            f"{np.mean([m['sharpe'] for m in rnd]):.2f} |"
+        )
 
     for name, trades in configs.items():
         lines += [
             "",
-            f"## 分年度（{name}，8bps）",
+            f"## oc 分年度（{name}，8bps）",
             "| 年份 | 交易数 | 净胜率 | 每笔净收益bp | 净收益合计% |",
             "|---|---|---|---|---|",
         ]
@@ -193,13 +248,31 @@ def run_report(configs: dict[str, list[Trade]], days: list[dt.date], since: dt.d
     key = f"live+gate{GATE}" if f"live+gate{GATE}" in configs else next(iter(configs))
     lines += [
         "",
-        f"## 分品种（{key}，8bps，按每笔净收益升序）",
+        f"## oc 分品种（{key}，8bps，按每笔净收益升序）",
         "| 品种 | 交易数 | 净胜率 | 每笔净收益bp |",
         "|---|---|---|---|",
     ]
     for code, n, wr, avg in by_code(configs[key], 8.0):
         lines.append(f"| {code} | {n} | {wr:.1%} | {avg:+.1f} |")
     return "\n".join(lines)
+
+
+async def _load_oc(session, since: dt.date, until: dt.date) -> dict:
+    rows = (
+        await session.execute(
+            text(
+                "SELECT variety_code, trade_date, open, close FROM daily_bar"
+                " WHERE trade_date >= :a AND trade_date <= :b"
+            ),
+            {"a": since, "b": until},
+        )
+    ).all()
+    out = {}
+    for r in rows:
+        o = float(r.open)
+        if o:
+            out[(r.variety_code, r.trade_date)] = (float(r.close) / o - 1.0) * 100.0
+    return out
 
 
 async def run(since: dt.date, until: dt.date, codes_filter: list[str] | None) -> None:
@@ -213,6 +286,7 @@ async def run(since: dt.date, until: dt.date, codes_filter: list[str] | None) ->
             daily = await _load_daily(session, since, until)
             ext_codes = sorted({e.ext for items in edges.values() for e in items})
             foreign = await _load_foreign(session, ext_codes, since, until)
+            oc = await _load_oc(session, since, until)
 
         days = sorted({b[0] for bars in daily.values() for b in bars if since <= b[0] <= until})
         configs: dict[str, list[Trade]] = {
@@ -233,11 +307,11 @@ async def run(since: dt.date, until: dt.date, codes_filter: list[str] | None) ->
                     band_scale=scale,
                 )
                 if prefix == "live":
-                    configs["live(线上带宽无门槛)"].extend(trades_from_records(recs, None))
-                    configs[f"live+gate{GATE}"].extend(trades_from_records(recs, GATE))
+                    configs["live(线上带宽无门槛)"].extend(trades_from_records(recs, None, oc))
+                    configs[f"live+gate{GATE}"].extend(trades_from_records(recs, GATE, oc))
                 else:
-                    configs["scale1.0(无门槛)"].extend(trades_from_records(recs, None))
-                    configs[f"scale1.0+gate{GATE}"].extend(trades_from_records(recs, GATE))
+                    configs["scale1.0(无门槛)"].extend(trades_from_records(recs, None, oc))
+                    configs[f"scale1.0+gate{GATE}"].extend(trades_from_records(recs, GATE, oc))
 
         report = run_report(configs, days, since, until)
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
