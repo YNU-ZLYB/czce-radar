@@ -352,6 +352,78 @@ def _run(p: Panel, x: np.ndarray, y: np.ndarray, prim: np.ndarray, holdout_days:
             f"95%CI[{np.percentile(diffs, 2.5) * 100:+.1f},{np.percentile(diffs, 97.5) * 100:+.1f}] "
             f"选中重叠 {len(np.intersect1d(idx_c, idx_a))}/{k}"
         )
+
+    # ---- 分块稳健性：dev OOF 切成 60 交易日块，逐块比较，判定"稳定赢"还是"碰运气"
+    lines += ["", "## 稳健性：dev OOF 按 60 交易日分块（每块独立取 top-k）"]
+    conf_dev = p.conf[dev]
+    block_days = np.array(sorted(set(dd[ok].tolist())))
+    for f in (0.10, 0.20):
+        diffs_h: list[float] = []
+        diffs_l: list[float] = []
+        for s in range(0, len(block_days), 60):
+            blk = block_days[s : s + 60]
+            m = ok & np.isin(dd, blk)
+            if m.sum() < 200:
+                continue
+            k = max(1, int(m.sum() * f))
+            yb, cb, hb, lb = yd[m], conf_dev[m], oof_hgb[m], oof_logit[m]
+            ac = float(yb[np.argsort(-cb)[:k]].mean())
+            ah = float(yb[np.argsort(-hb)[:k]].mean())
+            al = float(yb[np.argsort(-lb)[:k]].mean())
+            diffs_h.append(ah - ac)
+            diffs_l.append(al - ac)
+            lines.append(
+                f"- {f:.0%} 块 {dt.date.fromordinal(int(blk[0]))} n={len(yb)}: "
+                f"conf {ac:.1%} / meta-hgb {ah:.1%} ({(ah - ac) * 100:+.1f}pp) / "
+                f"meta-logit {al:.1%} ({(al - ac) * 100:+.1f}pp)"
+            )
+        for name, diffs in (("meta-hgb", diffs_h), ("meta-logit", diffs_l)):
+            if diffs:
+                wins = sum(1 for d in diffs if d > 0)
+                lines.append(
+                    f"  => {f:.0%} {name}: 平均 {np.mean(diffs) * 100:+.1f}pp，"
+                    f"{wins}/{len(diffs)} 块优于 conf"
+                )
+
+    # ---- holdout 配对检验：差异只来自两边选中集不重叠的部分
+    if hold.sum() > 0:
+        from collections import Counter
+
+        from scipy.stats import binomtest
+
+        lines += ["", "## holdout 配对检验（McNemar，只看不重叠的选中项）"]
+        conf_hold = p.conf[hold]
+        for f in (0.10, 0.20):
+            k = max(1, int(len(yh) * f))
+            ic = set(np.argsort(-conf_hold)[:k].tolist())
+            ih = set(np.argsort(-hh)[:k].tolist())
+            only_c = sorted(ic - ih)
+            only_h = sorted(ih - ic)
+            b = int(yh[only_h].sum())
+            c = int(yh[only_c].sum())
+            if b + c:
+                pv = binomtest(b, b + c, 0.5).pvalue
+                lines.append(
+                    f"- {f:.0%}: 仅 meta 选中 {len(only_h)} 个命中 {b}；"
+                    f"仅 conf 选中 {len(only_c)} 个命中 {c}；McNemar p={pv:.3f}"
+                )
+            lines.append(
+                f"  meta 选中品种 top: {Counter(ch[np.argsort(-hh)[:k]].tolist()).most_common(5)}"
+            )
+            lines.append(
+                f"  conf 选中品种 top: {Counter(ch[np.argsort(-conf_hold)[:k]].tolist()).most_common(5)}"
+            )
+            rng = np.random.default_rng(1)
+            diffs = np.empty(800)
+            for bi in range(800):
+                pick = rng.integers(0, len(yh), len(yh))
+                cc = yh[pick[np.argsort(-conf_hold[pick])[:k]]].mean()
+                aa = yh[pick[np.argsort(-hh[pick])[:k]]].mean()
+                diffs[bi] = aa - cc
+            lines.append(
+                f"  {f:.0%} holdout bootstrap: meta-hgb - conf {diffs.mean() * 100:+.1f}pp "
+                f"95%CI[{np.percentile(diffs, 2.5) * 100:+.1f},{np.percentile(diffs, 97.5) * 100:+.1f}]"
+            )
     return "\n".join(lines)
 
 
