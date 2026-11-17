@@ -214,7 +214,7 @@ async def run(since: dt.date, until: dt.date, codes_filter: list[str] | None) ->
             ext_codes = sorted({e.ext for items in edges.values() for e in items})
             foreign = await _load_foreign(session, ext_codes, since, until)
 
-        days = sorted({b.day for bars in daily.values() for b in bars if since <= b.day <= until})
+        days = sorted({b[0] for bars in daily.values() for b in bars if since <= b[0] <= until})
         configs: dict[str, list[Trade]] = {
             "live(线上带宽无门槛)": [],
             f"live+gate{GATE}": [],
