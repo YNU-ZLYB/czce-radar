@@ -44,6 +44,19 @@ def model_version_for(day: dt.date) -> str:
     return f"rule-{day:%Y%m%d}-01"
 
 
+def apply_confidence_gate(
+    direction: int, bucket: str, confidence: float, threshold: float
+) -> tuple[int, str]:
+    """置信度门槛：方向预测的 confidence 低于阈值时降级为震荡（不展示方向）。
+
+    confidence 本身仍原样写入，便于事后审计；只有 direction / bucket 被改写。
+    threshold <= 0 时不做任何过滤（退回原行为）。
+    """
+    if threshold > 0 and direction != 0 and confidence < threshold:
+        return 0, "震荡"
+    return direction, bucket
+
+
 async def _missing_foreign(conn: Conn, code: str, features: dict[str, Any]) -> int:
     ext_codes = (
         await conn.execute(
@@ -179,8 +192,19 @@ async def _upsert_prediction(
     )
 
 
-async def predict_variety(conn: Conn, code: str) -> list[str] | None:
-    """为单品种生成并 upsert 预测（每个生效模型版本一行）；没有快照时返回 None。"""
+async def predict_variety(
+    conn: Conn, code: str, *, confidence_threshold: float | None = None
+) -> list[str] | None:
+    """为单品种生成并 upsert 预测（每个生效模型版本一行）；没有快照时返回 None。
+
+    ``confidence_threshold`` 为 None 时从运行期配置读取；方向预测的 confidence
+    低于阈值时降级为震荡（不展示方向）。设为 0.0 关闭门槛。
+    """
+    if confidence_threshold is None:
+        from app.core.config import load_settings
+
+        confidence_threshold = load_settings().prediction_confidence_threshold
+
     snap = (
         await conn.execute(
             text(
@@ -203,13 +227,16 @@ async def predict_variety(conn: Conn, code: str) -> list[str] | None:
 
     # 1) 永远先写规则基线行（无 active 融合时它就是展示版本，保证产出连续）
     rule_version = model_version_for(target_date)
+    rule_dir, rule_bucket = apply_confidence_gate(
+        out.direction, out.bucket, out.confidence, confidence_threshold
+    )
     await _upsert_prediction(
         conn,
         code=code,
         target_date=target_date,
         asof=asof,
-        direction=out.direction,
-        bucket=out.bucket,
+        direction=rule_dir,
+        bucket=rule_bucket,
         p_down=out.p_down,
         p_flat=out.p_flat,
         p_up=out.p_up,
@@ -236,17 +263,21 @@ async def predict_variety(conn: Conn, code: str) -> list[str] | None:
             confidence *= 0.7
         if is_event:
             confidence *= 0.8
+        confidence = min(confidence, 1.0)
+        fus_dir, fus_bucket = apply_confidence_gate(
+            direction_from_probs(fused), bucket_from_probs(fused), confidence, confidence_threshold
+        )
         await _upsert_prediction(
             conn,
             code=code,
             target_date=target_date,
             asof=asof,
-            direction=direction_from_probs(fused),
-            bucket=bucket_from_probs(fused),
+            direction=fus_dir,
+            bucket=fus_bucket,
             p_down=fused[0],
             p_flat=fused[1],
             p_up=fused[2],
-            confidence=min(confidence, 1.0),
+            confidence=confidence,
             out=out,
             model_version=model.version,
         )
@@ -255,7 +286,10 @@ async def predict_variety(conn: Conn, code: str) -> list[str] | None:
 
 
 async def predict_varieties(
-    session_factory: async_sessionmaker[AsyncSession], codes: list[str]
+    session_factory: async_sessionmaker[AsyncSession],
+    codes: list[str],
+    *,
+    confidence_threshold: float | None = None,
 ) -> dict[str, Any]:
     """批量预测（每个品种独立事务，单品种失败不拖累其余）。"""
     produced: list[str] = []
@@ -264,7 +298,9 @@ async def predict_varieties(
     for code in sorted(codes):
         try:
             async with session_factory() as session, session.begin():
-                versions = await predict_variety(session, code)
+                versions = await predict_variety(
+                    session, code, confidence_threshold=confidence_threshold
+                )
             if versions is None:
                 skipped.append(code)
             else:

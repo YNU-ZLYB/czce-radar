@@ -135,7 +135,7 @@ async def test_engine_fusion_degraded_when_artifact_missing(db_session) -> None:
     )
     await session.flush()
 
-    versions = await predict_variety(session, "MA")
+    versions = await predict_variety(session, "MA", confidence_threshold=0.0)
     assert versions == ["rule-20261110-01", "gbm-20261110-99"]
     await session.flush()
 

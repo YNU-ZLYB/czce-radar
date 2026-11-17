@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     worker_heartbeat_ttl_sec: int = 90
     model_dir: str = "models"  # GBM 产物目录（相对仓库根），gitignored
 
+    # 置信度门槛：方向预测的 confidence 低于此值时降级为震荡（不展示方向）。
+    # 默认 0.66 对应四年回测 top30% 分位：开发集 68.0% / holdout 68.1% 命中。
+    # 设为 0.0 关闭门槛（退回原行为）。
+    prediction_confidence_threshold: float = 0.66
+
     # 资讯 LLM 抽取（可选）：无 key 时只用规则抽取，成本为 0
     llm_api_key: str | None = None
     llm_base_url: str = "https://api.deepseek.com"

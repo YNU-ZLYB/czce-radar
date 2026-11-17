@@ -53,6 +53,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       RUN_MIGRATIONS: "1"
       CORS_ORIGINS: '["http://${PUBLIC_HOST:-localhost}"]'
+    volumes:
+      # 回测/分析报告持久化：避免每次 --build 重建镜像后丢失
+      - appdocs:/app/docs/backtest
+      # GBM 模型产物持久化：训练生成的 booster/calibrator 需跨重启保留
+      - models:/app/models
     depends_on:
       db:
         condition: service_healthy
@@ -71,6 +76,11 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-czce}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-czce}
       REDIS_URL: redis://redis:6379/0
       RUN_MIGRATIONS: "0"
+    volumes:
+      # 回测/分析报告持久化：避免每次 --build 重建镜像后丢失
+      - appdocs:/app/docs/backtest
+      # GBM 模型产物持久化：训练生成的 booster/calibrator 需跨重启保留
+      - models:/app/models
     healthcheck:
       disable: true
     depends_on:
@@ -96,3 +106,7 @@ services:
 
 volumes:
   pgdata:
+  # 回测/分析报告持久化卷（api 与 worker 共享）
+  appdocs:
+  # GBM 模型产物持久化卷（api 与 worker 共享）
+  models:

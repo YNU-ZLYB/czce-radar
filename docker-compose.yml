@@ -40,6 +40,9 @@ services:
       API_TOKEN: local-dev-token
       CORS_ORIGINS: '["http://localhost:5173"]'
       RUN_MIGRATIONS: "1"
+    volumes:
+      - appdocs:/app/docs/backtest
+      - models:/app/models
     ports:
       - "8000:8000"
     depends_on:
@@ -57,6 +60,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       API_TOKEN: local-dev-token
       RUN_MIGRATIONS: "0"
+    volumes:
+      - appdocs:/app/docs/backtest
+      - models:/app/models
     # 镜像自带 HEALTHCHECK 打的是 API 的 /live；worker 不监听端口，故关闭
     healthcheck:
       disable: true
@@ -71,3 +77,5 @@ services:
 
 volumes:
   pgdata:
+  appdocs:
+  models:

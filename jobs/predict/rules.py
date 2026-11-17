@@ -23,6 +23,7 @@ from typing import Any
 
 SIGNAL_SCALE = 22.0
 NEWS_WEIGHT = 0.2
+RECEIPT_WEIGHT = 0.02  # 仓单 5 日变化率的传导权重（仓单增→利空，故取负）
 DEFAULT_VOL = 1.5  # σ 缺失时的兜底（%）；不伪装成 0
 MIN_EFFECTIVE_WEIGHT = 1.0
 
@@ -189,6 +190,25 @@ def _contributor_rows(features: dict[str, Any]) -> tuple[list[dict[str, Any]], f
                 "name": "资讯情绪(T-1)",
                 "value": round(sentiment_f, 3),
                 "weight": NEWS_WEIGHT,
+                "q": 1.0,
+                "contribution": round(contribution, 2),
+            }
+        )
+
+    # 仓单 5 日变化率：仓单增加 = 可交割供给增加 = 利空，故贡献取负。
+    # 权重较小（0.02），避免 5 日口径的剧烈波动压过日度外盘传导。
+    industry = features.get("industry") or {}
+    receipt_chg = industry.get("receipt_chg_5d")
+    if receipt_chg is not None:
+        receipt_f = float(receipt_chg)
+        contribution = -receipt_f * RECEIPT_WEIGHT
+        raw += contribution
+        effective += RECEIPT_WEIGHT
+        rows.append(
+            {
+                "name": "仓单(5日)",
+                "value": round(receipt_f, 3),
+                "weight": RECEIPT_WEIGHT,
                 "q": 1.0,
                 "contribution": round(contribution, 2),
             }

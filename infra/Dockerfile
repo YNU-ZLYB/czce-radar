@@ -26,6 +26,10 @@ ARG PIP_INDEX_URL=""
 RUN pip install ${PIP_INDEX_URL:+--index-url ${PIP_INDEX_URL}} . \
     && chmod +x /usr/local/bin/czce-entrypoint
 
+# 运行时输出目录：需持久化卷挂载（compose 的 appdocs / models 卷）。
+# 预创建并设所有权，确保非 root 用户 appuser 可写；同时让 named 卷首次挂载时继承正确属主。
+RUN mkdir -p /app/docs/backtest /app/models
+
 RUN useradd --create-home --uid 10001 appuser \
     && chown -R appuser:appuser /app
 USER appuser

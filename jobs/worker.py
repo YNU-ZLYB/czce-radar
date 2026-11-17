@@ -204,7 +204,9 @@ async def build_snapshots(ctx: dict[str, Any]) -> dict[str, Any]:
 async def predict_daily(ctx: dict[str, Any]) -> dict[str, Any]:
     """08:30 CST：Layer A 规则预测 → prediction（同版本幂等 upsert）。"""
     codes = list(DOMESTIC_SINA_SYMBOLS)
-    result = await predict_varieties(ctx["session_factory"], codes)
+    result = await predict_varieties(
+        ctx["session_factory"], codes, confidence_threshold=_settings.prediction_confidence_threshold
+    )
     return {**result, "total": len(codes)}
 
 

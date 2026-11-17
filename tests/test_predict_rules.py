@@ -11,7 +11,7 @@ from sqlalchemy import text
 from czce_schema.symbols import DOMESTIC_SINA_SYMBOLS
 from jobs.knowledge.importer import import_knowledge
 from jobs.knowledge.models import load_knowledge_dir
-from jobs.predict.engine import predict_variety
+from jobs.predict.engine import apply_confidence_gate, predict_variety
 from jobs.predict.rules import (
     BAND_SCALE_BY_CODE,
     BUCKET_DOWN,
@@ -158,6 +158,90 @@ def test_missing_foreign_and_event_reduce_confidence() -> None:
     assert event.confidence == pytest.approx(base.confidence * 0.8, abs=1e-4)
 
 
+def test_receipt_increase_bearish_and_decrease_bullish() -> None:
+    # 仓单 5 日增加 → 利空，exp_change 应比无仓单时更小
+    base = score(_features())
+    up = score(_features(industry={"receipt_chg_5d": 20.0}))
+    down = score(_features(industry={"receipt_chg_5d": -20.0}))
+    assert up.exp_change < base.exp_change
+    assert down.exp_change > base.exp_change
+    # 贡献者明细里应出现仓单行
+    names = [c["name"] for c in up.contributor]
+    assert "仓单(5日)" in names
+    receipt_row = next(c for c in up.contributor if c["name"] == "仓单(5日)")
+    # 仓单增 20% × 权重 0.02 = 贡献 -0.4
+    assert receipt_row["contribution"] == pytest.approx(-0.4, abs=0.01)
+
+
+def test_receipt_missing_skipped() -> None:
+    # industry 缺失或 receipt_chg_5d 为 None → 不增加仓单贡献者
+    out = score(_features(industry={}))
+    assert not any(c["name"] == "仓单(5日)" for c in out.contributor)
+    out2 = score(_features(industry={"receipt_chg_5d": None}))
+    assert not any(c["name"] == "仓单(5日)" for c in out2.contributor)
+
+
+def test_apply_confidence_gate_downgrades_low_confidence_direction() -> None:
+    # 方向预测且 confidence < 阈值 → 降级为震荡
+    d, b = apply_confidence_gate(1, BUCKET_UP, 0.5, 0.66)
+    assert d == 0 and b == BUCKET_FLAT
+    # 方向预测且 confidence >= 阈值 → 保持原方向
+    d, b = apply_confidence_gate(-1, BUCKET_DOWN, 0.7, 0.66)
+    assert d == -1 and b == BUCKET_DOWN
+    # 已是震荡预测 → 不受阈值影响
+    d, b = apply_confidence_gate(0, BUCKET_FLAT, 0.3, 0.66)
+    assert d == 0 and b == BUCKET_FLAT
+    # threshold <= 0 → 关闭门槛
+    d, b = apply_confidence_gate(1, BUCKET_UP, 0.1, 0.0)
+    assert d == 1 and b == BUCKET_UP
+    # confidence 恰等于阈值 → 保留（严格小于才降级）
+    d, b = apply_confidence_gate(1, BUCKET_UP, 0.66, 0.66)
+    assert d == 1 and b == BUCKET_UP
+
+
+async def test_engine_confidence_gate_downgrades_direction(db_session) -> None:  # type: ignore[no-untyped-def]
+    """低置信度方向预测被降级为震荡；confidence 字段保留原值便于审计。"""
+    session = db_session
+    await session.execute(text("DELETE FROM prediction WHERE variety_code = 'MA'"))
+    await session.execute(text("DELETE FROM feature_snapshot WHERE variety_code = 'MA'"))
+    await import_knowledge(
+        session, [d for d in load_knowledge_dir(KNOWLEDGE) if d.code == "MA"]
+    )
+    # 去掉季节性 → 方向预测但 confidence ~0.52 < 0.66
+    features = _features()
+    features["seasonality"] = {}
+    features["asof"] = "2026-11-10T00:25:00Z"
+    features["version"] = "f1"
+    await session.execute(
+        text(
+            "INSERT INTO feature_snapshot (variety_code, asof, version, features)"
+            " VALUES ('MA', :asof, 'f1', CAST(:f AS jsonb))"
+        ),
+        {"asof": dt.datetime(2026, 11, 10, 0, 25, tzinfo=dt.UTC), "f": _json(features)},
+    )
+
+    expected = score(features)
+    assert expected.direction != 0  # 确认有方向
+    assert expected.confidence < 0.66  # 确认低于阈值
+
+    await predict_variety(session, "MA", confidence_threshold=0.66)
+    await session.flush()
+
+    row = (
+        await session.execute(
+            text(
+                "SELECT direction, bucket, confidence FROM prediction"
+                " WHERE variety_code = 'MA' AND model_version = 'rule-20261110-01'"
+            )
+        )
+    ).one()
+    assert row.direction == 0
+    assert row.bucket == BUCKET_FLAT
+    # confidence 不被改写，保留原值便于事后审计
+    assert float(row.confidence) == pytest.approx(expected.confidence, abs=1e-4)
+    await session.rollback()
+
+
 async def test_engine_persists_traceable_prediction(db_session) -> None:  # type: ignore[no-untyped-def]
     session = db_session
     await session.execute(text("DELETE FROM prediction WHERE variety_code = 'MA'"))
@@ -175,7 +259,7 @@ async def test_engine_persists_traceable_prediction(db_session) -> None:  # type
         ),
         {"asof": dt.datetime(2026, 11, 10, 0, 25, tzinfo=dt.UTC), "f": _json(features)},
     )
-    out = await predict_variety(session, "MA")
+    out = await predict_variety(session, "MA", confidence_threshold=0.0)
     assert out == ["rule-20261110-01"]  # 无融合模型 → 纯规则版本
     await session.flush()
 
@@ -202,7 +286,7 @@ async def test_engine_persists_traceable_prediction(db_session) -> None:  # type
     )
 
     # 同版本幂等
-    await predict_variety(session, "MA")
+    await predict_variety(session, "MA", confidence_threshold=0.0)
     count = await session.scalar(
         text("SELECT count(*) FROM prediction WHERE variety_code = 'MA'")
     )
@@ -243,7 +327,7 @@ async def test_five_consecutive_days_21_varieties_no_null(db_session) -> None:  
                     "f": _json(features),
                 },
             )
-            await predict_variety(session, code)
+            await predict_variety(session, code, confidence_threshold=0.0)
     await session.flush()
 
     count, nulls = (
